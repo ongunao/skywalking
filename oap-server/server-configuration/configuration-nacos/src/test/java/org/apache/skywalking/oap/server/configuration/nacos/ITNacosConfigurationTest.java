@@ -21,49 +21,54 @@ package org.apache.skywalking.oap.server.configuration.nacos;
 import com.alibaba.nacos.api.NacosFactory;
 import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.exception.NacosException;
-import org.apache.skywalking.apm.util.PropertyPlaceholderHelper;
+import java.io.FileNotFoundException;
+import java.io.Reader;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Properties;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.skywalking.oap.server.library.util.PropertyPlaceholderHelper;
 import org.apache.skywalking.oap.server.library.module.ApplicationConfiguration;
 import org.apache.skywalking.oap.server.library.module.ModuleManager;
 import org.apache.skywalking.oap.server.library.util.CollectionUtils;
 import org.apache.skywalking.oap.server.library.util.ResourceUtils;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.utility.DockerImageName;
 import org.yaml.snakeyaml.Yaml;
-
-import java.io.FileNotFoundException;
-import java.io.Reader;
-import java.util.Map;
-import java.util.Properties;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-/**
- * @author kezhenxu94
- */
+@Slf4j
 public class ITNacosConfigurationTest {
-    private static final Logger LOGGER = LoggerFactory.getLogger(ITNacosConfigurationTest.class);
-
     private final Yaml yaml = new Yaml();
 
     private NacosConfigurationTestProvider provider;
 
+    @Rule
+    public final GenericContainer<?> container =
+        new GenericContainer<>(DockerImageName.parse("nacos/nacos-server:1.4.2"))
+            .waitingFor(Wait.forLogMessage(".*Nacos started successfully.*", 1))
+            .withEnv(Collections.singletonMap("MODE", "standalone"));
+
     @Before
     public void setUp() throws Exception {
+        System.setProperty("nacos.host", container.getHost());
+        System.setProperty("nacos.port", String.valueOf(container.getMappedPort(8848)));
+
         final ApplicationConfiguration applicationConfiguration = new ApplicationConfiguration();
         loadConfig(applicationConfiguration);
 
         final ModuleManager moduleManager = new ModuleManager();
         moduleManager.init(applicationConfiguration);
 
-        provider =
-            (NacosConfigurationTestProvider) moduleManager
-                .find(NacosConfigurationTestModule.NAME)
-                .provider();
+        provider = (NacosConfigurationTestProvider) moduleManager.find(NacosConfigurationTestModule.NAME).provider();
 
         assertNotNull(provider);
     }
@@ -76,7 +81,7 @@ public class ITNacosConfigurationTest {
         final Properties properties = new Properties();
         final String nacosHost = System.getProperty("nacos.host");
         final String nacosPort = System.getProperty("nacos.port");
-        LOGGER.info("nacosHost: {}, nacosPort: {}", nacosHost, nacosPort);
+        log.info("nacosHost: {}, nacosPort: {}", nacosHost, nacosPort);
         properties.put("serverAddr", nacosHost + ":" + nacosPort);
 
         final ConfigService configService = NacosFactory.createConfigService(properties);
@@ -95,6 +100,50 @@ public class ITNacosConfigurationTest {
         assertNull(provider.watcher.value());
     }
 
+    @Test(timeout = 20000)
+    public void shouldReadUpdatedGroup() throws NacosException {
+        assertEquals("{}", provider.groupWatcher.groupItems().toString());
+
+        final Properties properties = new Properties();
+        final String nacosHost = System.getProperty("nacos.host");
+        final String nacosPort = System.getProperty("nacos.port");
+        log.info("nacosHost: {}, nacosPort: {}", nacosHost, nacosPort);
+        properties.put("serverAddr", nacosHost + ":" + nacosPort);
+
+        final ConfigService configService = NacosFactory.createConfigService(properties);
+        //test add group key and item1 item2
+        assertTrue(configService.publishConfig("test-module.default.testKeyGroup", "skywalking", "item1\n item2"));
+        assertTrue(configService.publishConfig("item1", "skywalking", "100"));
+        assertTrue(configService.publishConfig("item2", "skywalking", "200"));
+        for (String v = provider.groupWatcher.groupItems().get("item1"); v == null; v = provider.groupWatcher.groupItems().get("item1")) {
+        }
+        for (String v = provider.groupWatcher.groupItems().get("item2"); v == null; v = provider.groupWatcher.groupItems().get("item2")) {
+        }
+        assertEquals("100", provider.groupWatcher.groupItems().get("item1"));
+        assertEquals("200", provider.groupWatcher.groupItems().get("item2"));
+
+        //test remove item1
+        assertTrue(configService.removeConfig("item1", "skywalking"));
+        for (String v = provider.groupWatcher.groupItems().get("item1"); v != null; v = provider.groupWatcher.groupItems().get("item1")) {
+        }
+        assertNull(provider.groupWatcher.groupItems().get("item1"));
+
+        //test modify item1
+        assertTrue(configService.publishConfig("item1", "skywalking", "300"));
+        for (String v = provider.groupWatcher.groupItems().get("item1"); v == null; v = provider.groupWatcher.groupItems().get("item1")) {
+        }
+        assertEquals("300", provider.groupWatcher.groupItems().get("item1"));
+
+        //test remove group key
+        assertTrue(configService.removeConfig("test-module.default.testKeyGroup", "skywalking"));
+        for (String v = provider.groupWatcher.groupItems().get("item2"); v != null; v = provider.groupWatcher.groupItems().get("item2")) {
+        }
+        assertNull(provider.groupWatcher.groupItems().get("item2"));
+        //chean
+        assertTrue(configService.removeConfig("item1", "skywalking"));
+        assertTrue(configService.removeConfig("item2", "skywalking"));
+    }
+
     @SuppressWarnings("unchecked")
     private void loadConfig(ApplicationConfiguration configuration) throws FileNotFoundException {
         Reader applicationReader = ResourceUtils.read("application.yml");
@@ -108,8 +157,7 @@ public class ITNacosConfigurationTest {
                         if (propertiesConfig != null) {
                             propertiesConfig.forEach((key, value) -> {
                                 properties.put(key, value);
-                                final Object replaceValue = yaml.load(PropertyPlaceholderHelper.INSTANCE
-                                    .replacePlaceholders(value + "", properties));
+                                final Object replaceValue = yaml.load(PropertyPlaceholderHelper.INSTANCE.replacePlaceholders(value + "", properties));
                                 if (replaceValue != null) {
                                     properties.replace(key, replaceValue);
                                 }

@@ -21,16 +21,14 @@ package org.apache.skywalking.oap.server.configuration.apollo;
 import com.ctrip.framework.apollo.Config;
 import com.ctrip.framework.apollo.ConfigService;
 import com.google.common.base.Strings;
+import java.util.Optional;
+import java.util.Set;
 import org.apache.skywalking.oap.server.configuration.api.ConfigTable;
 import org.apache.skywalking.oap.server.configuration.api.ConfigWatcherRegister;
+import org.apache.skywalking.oap.server.configuration.api.GroupConfigTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Set;
-
-/**
- * @author kezhenxu94
- */
 public class ApolloConfigWatcherRegister extends ConfigWatcherRegister {
     private static final Logger LOGGER = LoggerFactory.getLogger(ApolloConfigWatcherRegister.class);
 
@@ -57,7 +55,7 @@ public class ApolloConfigWatcherRegister extends ConfigWatcherRegister {
     }
 
     @Override
-    public ConfigTable readConfig(Set<String> keys) {
+    public Optional<ConfigTable> readConfig(Set<String> keys) {
         final ConfigTable configTable = new ConfigTable();
 
         for (final String name : keys) {
@@ -65,6 +63,26 @@ public class ApolloConfigWatcherRegister extends ConfigWatcherRegister {
             configTable.add(new ConfigTable.ConfigItem(name, value));
         }
 
-        return configTable;
+        return Optional.of(configTable);
+    }
+
+    @Override
+    public Optional<GroupConfigTable> readGroupConfig(final Set<String> keys) {
+        GroupConfigTable groupConfigTable = new GroupConfigTable();
+        Set<String> allKeys = this.configReader.getPropertyNames();
+
+        keys.forEach(key -> {
+            GroupConfigTable.GroupConfigItems groupConfigItems = new GroupConfigTable.GroupConfigItems(key);
+            groupConfigTable.addGroupConfigItems(groupConfigItems);
+            String groupKey = key + ".";
+            if (allKeys != null) {
+                allKeys.stream().filter(it -> it.startsWith(groupKey)).forEach(groupItemKey -> {
+                    String itemValue = this.configReader.getProperty(groupItemKey, null);
+                    String itemName = groupItemKey.substring(groupKey.length());
+                    groupConfigItems.add(new ConfigTable.ConfigItem(itemName, itemValue));
+                });
+            }
+        });
+        return Optional.of(groupConfigTable);
     }
 }

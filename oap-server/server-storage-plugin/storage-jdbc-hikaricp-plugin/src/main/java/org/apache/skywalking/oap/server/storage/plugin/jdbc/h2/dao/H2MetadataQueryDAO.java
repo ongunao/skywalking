@@ -20,6 +20,7 @@ package org.apache.skywalking.oap.server.storage.plugin.jdbc.h2.dao;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.sql.Connection;
@@ -27,32 +28,27 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.skywalking.oap.server.core.query.entity.Attribute;
-import org.apache.skywalking.oap.server.core.query.entity.Database;
-import org.apache.skywalking.oap.server.core.query.entity.Endpoint;
-import org.apache.skywalking.oap.server.core.query.entity.Language;
-import org.apache.skywalking.oap.server.core.query.entity.LanguageTrans;
-import org.apache.skywalking.oap.server.core.query.entity.Service;
-import org.apache.skywalking.oap.server.core.query.entity.ServiceInstance;
-import org.apache.skywalking.oap.server.core.register.EndpointInventory;
-import org.apache.skywalking.oap.server.core.register.NodeType;
-import org.apache.skywalking.oap.server.core.register.RegisterSource;
-import org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory;
-import org.apache.skywalking.oap.server.core.register.ServiceInventory;
-import org.apache.skywalking.oap.server.core.source.DetectPoint;
+import java.util.Map;
+
+import org.apache.skywalking.oap.server.core.analysis.IDManager;
+import org.apache.skywalking.oap.server.core.analysis.Layer;
+import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
+import org.apache.skywalking.oap.server.core.analysis.manual.endpoint.EndpointTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.instance.InstanceTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.process.ProcessDetectType;
+import org.apache.skywalking.oap.server.core.analysis.manual.process.ProcessTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.service.ServiceTraffic;
+import org.apache.skywalking.oap.server.core.query.enumeration.Language;
+import org.apache.skywalking.oap.server.core.query.enumeration.ProfilingSupportStatus;
+import org.apache.skywalking.oap.server.core.query.type.Attribute;
+import org.apache.skywalking.oap.server.core.query.type.Endpoint;
+import org.apache.skywalking.oap.server.core.query.type.Process;
+import org.apache.skywalking.oap.server.core.query.type.Service;
+import org.apache.skywalking.oap.server.core.query.type.ServiceInstance;
 import org.apache.skywalking.oap.server.core.storage.query.IMetadataQueryDAO;
 import org.apache.skywalking.oap.server.library.client.jdbc.hikaricp.JDBCHikariCPClient;
-import org.apache.skywalking.oap.server.library.util.BooleanUtils;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
 
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.HOST_NAME;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.IPV4S;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.LANGUAGE;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.OS_NAME;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.PROCESS_NO;
-
-/**
- * @author wusheng
- */
 public class H2MetadataQueryDAO implements IMetadataQueryDAO {
     private static final Gson GSON = new Gson();
 
@@ -65,133 +61,31 @@ public class H2MetadataQueryDAO implements IMetadataQueryDAO {
     }
 
     @Override
-    public int numOfService(long startTimestamp, long endTimestamp) throws IOException {
+    public List<Service> listServices(final String layer, final String group) throws IOException {
         StringBuilder sql = new StringBuilder();
         List<Object> condition = new ArrayList<>(5);
-        sql.append("select count(*) num from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        setTimeRangeCondition(sql, condition, startTimestamp, endTimestamp);
-        sql.append(" and ").append(ServiceInventory.IS_ADDRESS).append("=0");
-
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-                while (resultSet.next()) {
-                    return resultSet.getInt("num");
-                }
-            }
-        } catch (SQLException e) {
-            throw new IOException(e);
+        sql.append("select * from ").append(ServiceTraffic.INDEX_NAME);
+        if (StringUtil.isNotEmpty(layer) || StringUtil.isNotEmpty(group)) {
+            sql.append(" where ");
         }
-        return 0;
-    }
 
-    @Override
-    public int numOfEndpoint(long startTimestamp, long endTimestamp) throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(5);
-        sql.append("select count(*) num from ").append(EndpointInventory.INDEX_NAME).append(" where ");
-        sql.append(EndpointInventory.DETECT_POINT).append("=").append(DetectPoint.SERVER.ordinal());
-
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-
-                while (resultSet.next()) {
-                    return resultSet.getInt("num");
-                }
-            }
-        } catch (SQLException e) {
-            throw new IOException(e);
+        if (StringUtil.isNotEmpty(layer)) {
+            sql.append(ServiceTraffic.LAYER).append("=?");
+            condition.add(Layer.valueOf(layer).value());
         }
-        return 0;
-    }
-
-    @Override
-    public int numOfConjectural(long startTimestamp, long endTimestamp,
-        int nodeTypeValue) throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(5);
-        sql.append("select count(*) num from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        sql.append(ServiceInventory.NODE_TYPE).append("=?");
-        condition.add(nodeTypeValue);
-
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-                while (resultSet.next()) {
-                    return resultSet.getInt("num");
-                }
-            }
-        } catch (SQLException e) {
-            throw new IOException(e);
+        if (StringUtil.isNotEmpty(layer) && StringUtil.isNotEmpty(group)) {
+            sql.append(" and ");
         }
-        return 0;
-    }
-
-    @Override
-    public List<Service> getAllServices(long startTimestamp, long endTimestamp) throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(5);
-        sql.append("select * from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        setTimeRangeCondition(sql, condition, startTimestamp, endTimestamp);
-        sql.append(" and ").append(ServiceInventory.IS_ADDRESS).append("=? limit ").append(metadataQueryMaxSize);
-        condition.add(BooleanUtils.FALSE);
-
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-                return buildServices(resultSet);
-            }
-        } catch (SQLException e) {
-            throw new IOException(e);
+        if (StringUtil.isNotEmpty(group)) {
+            sql.append(ServiceTraffic.GROUP).append("=?");
+            condition.add(group);
         }
-    }
 
-    @Override
-    public List<Database> getAllDatabases() throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(1);
-        sql.append("select * from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        sql.append(ServiceInventory.NODE_TYPE).append("=? limit ").append(metadataQueryMaxSize);
-        condition.add(NodeType.Database.value());
-
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-                List<Database> databases = new ArrayList<>();
-                while (resultSet.next()) {
-                    Database database = new Database();
-                    database.setId(resultSet.getInt(ServiceInventory.SEQUENCE));
-                    database.setName(resultSet.getString(ServiceInventory.NAME));
-                    String propertiesString = resultSet.getString(ServiceInstanceInventory.PROPERTIES);
-                    if (!Strings.isNullOrEmpty(propertiesString)) {
-                        JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
-                        if (properties.has(ServiceInventory.PropertyUtil.DATABASE)) {
-                            database.setType(properties.get(ServiceInventory.PropertyUtil.DATABASE).getAsString());
-                        } else {
-                            database.setType("UNKNOWN");
-                        }
-                    }
-                    databases.add(database);
-                }
-                return databases;
-            }
-        } catch (SQLException e) {
-            throw new IOException(e);
-        }
-    }
-
-    @Override
-    public List<Service> searchServices(long startTimestamp, long endTimestamp,
-        String keyword) throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(5);
-        sql.append("select * from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        setTimeRangeCondition(sql, condition, startTimestamp, endTimestamp);
-        sql.append(" and ").append(ServiceInventory.IS_ADDRESS).append("=?");
-        condition.add(BooleanUtils.FALSE);
-        if (!Strings.isNullOrEmpty(keyword)) {
-            sql.append(" and ").append(ServiceInventory.NAME).append(" like \"%").append(keyword).append("%\"");
-        }
         sql.append(" limit ").append(metadataQueryMaxSize);
 
         try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
+            try (ResultSet resultSet = h2Client.executeQuery(
+                connection, sql.toString(), condition.toArray(new Object[0]))) {
                 return buildServices(resultSet);
             }
         } catch (SQLException e) {
@@ -200,55 +94,88 @@ public class H2MetadataQueryDAO implements IMetadataQueryDAO {
     }
 
     @Override
-    public Service searchService(String serviceCode) throws IOException {
+    public List<Service> getServices(final String serviceId) throws IOException {
         StringBuilder sql = new StringBuilder();
         List<Object> condition = new ArrayList<>(5);
-        sql.append("select * from ").append(ServiceInventory.INDEX_NAME).append(" where ");
-        sql.append(ServiceInventory.IS_ADDRESS).append("=?");
-        condition.add(BooleanUtils.FALSE);
-        sql.append(" and ").append(ServiceInventory.NAME).append(" = ?");
-        condition.add(serviceCode);
+        sql.append("select * from ").append(ServiceTraffic.INDEX_NAME).append(" where ");
+        sql.append(ServiceTraffic.SERVICE_ID).append(" = ?");
+        condition.add(serviceId);
+        sql.append(" limit ").append(metadataQueryMaxSize);
 
         try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
-
-                while (resultSet.next()) {
-                    Service service = new Service();
-                    service.setId(resultSet.getInt(ServiceInventory.SEQUENCE));
-                    service.setName(resultSet.getString(ServiceInventory.NAME));
-                    return service;
-                }
-            }
+            ResultSet resultSet = h2Client.executeQuery(
+                connection, sql.toString(), condition.toArray(new Object[0]));
+            return buildServices(resultSet);
         } catch (SQLException e) {
             throw new IOException(e);
         }
-
-        return null;
     }
 
     @Override
-    public List<Endpoint> searchEndpoint(String keyword, String serviceId,
-        int limit) throws IOException {
+    public List<ServiceInstance> listInstances(long startTimestamp, long endTimestamp,
+                                               String serviceId) throws IOException {
+        final long minuteTimeBucket = TimeBucket.getMinuteTimeBucket(startTimestamp);
+
         StringBuilder sql = new StringBuilder();
         List<Object> condition = new ArrayList<>(5);
-        sql.append("select * from ").append(EndpointInventory.INDEX_NAME).append(" where ");
-        sql.append(EndpointInventory.SERVICE_ID).append("=?");
+        sql.append("select * from ").append(InstanceTraffic.INDEX_NAME).append(" where ");
+        sql.append(InstanceTraffic.LAST_PING_TIME_BUCKET).append(" >= ?");
+        condition.add(minuteTimeBucket);
+        sql.append(" and ").append(InstanceTraffic.SERVICE_ID).append("=?");
+        condition.add(serviceId);
+        sql.append(" limit ").append(metadataQueryMaxSize);
+
+        try (Connection connection = h2Client.getConnection()) {
+            ResultSet resultSet = h2Client.executeQuery(
+                connection, sql.toString(), condition.toArray(new Object[0]));
+            return buildInstances(resultSet);
+
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public ServiceInstance getInstance(final String instanceId) throws IOException {
+        StringBuilder sql = new StringBuilder();
+        List<Object> condition = new ArrayList<>(5);
+        sql.append("select * from ").append(InstanceTraffic.INDEX_NAME).append(" where ");
+        sql.append(H2TableInstaller.ID_COLUMN).append(" = ?");
+        condition.add(instanceId);
+        sql.append(" limit ").append(metadataQueryMaxSize);
+
+        try (Connection connection = h2Client.getConnection()) {
+            ResultSet resultSet = h2Client.executeQuery(
+                connection, sql.toString(), condition.toArray(new Object[0]));
+            final List<ServiceInstance> instances = buildInstances(resultSet);
+            return instances.size() > 0 ? instances.get(0) : null;
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    @Override
+    public List<Endpoint> findEndpoint(String keyword, String serviceId, int limit) throws IOException {
+        StringBuilder sql = new StringBuilder();
+        List<Object> condition = new ArrayList<>(5);
+        sql.append("select * from ").append(EndpointTraffic.INDEX_NAME).append(" where ");
+        sql.append(EndpointTraffic.SERVICE_ID).append("=?");
         condition.add(serviceId);
         if (!Strings.isNullOrEmpty(keyword)) {
-            sql.append(" and ").append(EndpointInventory.NAME).append(" like '%").append(keyword).append("%' ");
+            sql.append(" and ").append(EndpointTraffic.NAME).append(" like concat('%',?,'%') ");
+            condition.add(keyword);
         }
-        sql.append(" and ").append(EndpointInventory.DETECT_POINT).append(" = ?");
-        condition.add(DetectPoint.SERVER.ordinal());
         sql.append(" limit ").append(limit);
 
         List<Endpoint> endpoints = new ArrayList<>();
         try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
+            try (ResultSet resultSet = h2Client.executeQuery(
+                connection, sql.toString(), condition.toArray(new Object[0]))) {
 
                 while (resultSet.next()) {
                     Endpoint endpoint = new Endpoint();
-                    endpoint.setId(resultSet.getInt(EndpointInventory.SEQUENCE));
-                    endpoint.setName(resultSet.getString(EndpointInventory.NAME));
+                    endpoint.setId(resultSet.getString(H2TableInstaller.ID_COLUMN));
+                    endpoint.setName(resultSet.getString(EndpointTraffic.NAME));
                     endpoints.add(endpoint);
                 }
             }
@@ -258,83 +185,199 @@ public class H2MetadataQueryDAO implements IMetadataQueryDAO {
         return endpoints;
     }
 
-    @Override
-    public List<ServiceInstance> getServiceInstances(long startTimestamp, long endTimestamp,
-        String serviceId) throws IOException {
-        StringBuilder sql = new StringBuilder();
-        List<Object> condition = new ArrayList<>(5);
-        sql.append("select * from ").append(ServiceInstanceInventory.INDEX_NAME).append(" where ");
-        setTimeRangeCondition(sql, condition, startTimestamp, endTimestamp);
-        sql.append(" and ").append(ServiceInstanceInventory.SERVICE_ID).append("=?");
-        condition.add(serviceId);
+    private List<Service> buildServices(ResultSet resultSet) throws SQLException {
+        List<Service> services = new ArrayList<>();
+        while (resultSet.next()) {
+            String serviceName = resultSet.getString(ServiceTraffic.NAME);
+            Service service = new Service();
+            service.setId(resultSet.getString(ServiceTraffic.SERVICE_ID));
+            service.setName(serviceName);
+            service.setShortName(resultSet.getString(ServiceTraffic.SHORT_NAME));
+            service.setGroup(resultSet.getString(ServiceTraffic.GROUP));
+            service.getLayers().add(Layer.valueOf(resultSet.getInt(ServiceTraffic.LAYER)).name());
+            services.add(service);
+        }
+        return services;
+    }
 
+    private List<ServiceInstance> buildInstances(ResultSet resultSet) throws SQLException {
         List<ServiceInstance> serviceInstances = new ArrayList<>();
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet resultSet = h2Client.executeQuery(connection, sql.toString(), condition.toArray(new Object[0]))) {
 
-                while (resultSet.next()) {
-                    ServiceInstance serviceInstance = new ServiceInstance();
-                    serviceInstance.setId(resultSet.getString(ServiceInstanceInventory.SEQUENCE));
-                    serviceInstance.setName(resultSet.getString(ServiceInstanceInventory.NAME));
+        while (resultSet.next()) {
+            ServiceInstance serviceInstance = new ServiceInstance();
+            serviceInstance.setId(resultSet.getString(H2TableInstaller.ID_COLUMN));
+            serviceInstance.setName(resultSet.getString(InstanceTraffic.NAME));
+            serviceInstance.setInstanceUUID(serviceInstance.getId());
 
-                    String propertiesString = resultSet.getString(ServiceInstanceInventory.PROPERTIES);
-                    if (!Strings.isNullOrEmpty(propertiesString)) {
-                        JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
-                        if (properties.has(LANGUAGE)) {
-                            serviceInstance.setLanguage(LanguageTrans.INSTANCE.value(properties.get(LANGUAGE).getAsString()));
-                        } else {
-                            serviceInstance.setLanguage(Language.UNKNOWN);
-                        }
-
-                        if (properties.has(OS_NAME)) {
-                            serviceInstance.getAttributes().add(new Attribute(OS_NAME, properties.get(OS_NAME).getAsString()));
-                        }
-                        if (properties.has(HOST_NAME)) {
-                            serviceInstance.getAttributes().add(new Attribute(HOST_NAME, properties.get(HOST_NAME).getAsString()));
-                        }
-                        if (properties.has(PROCESS_NO)) {
-                            serviceInstance.getAttributes().add(new Attribute(PROCESS_NO, properties.get(PROCESS_NO).getAsString()));
-                        }
-                        if (properties.has(IPV4S)) {
-                            List<String> ipv4s = ServiceInstanceInventory.PropertyUtil.ipv4sDeserialize(properties.get(IPV4S).getAsString());
-                            for (String ipv4 : ipv4s) {
-                                serviceInstance.getAttributes().add(new Attribute(ServiceInstanceInventory.PropertyUtil.IPV4S, ipv4));
-                            }
-                        }
+            String propertiesString = resultSet.getString(InstanceTraffic.PROPERTIES);
+            if (!Strings.isNullOrEmpty(propertiesString)) {
+                JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
+                for (Map.Entry<String, JsonElement> property : properties.entrySet()) {
+                    String key = property.getKey();
+                    String value = property.getValue().getAsString();
+                    if (key.equals(InstanceTraffic.PropertyUtil.LANGUAGE)) {
+                        serviceInstance.setLanguage(Language.value(value));
                     } else {
-                        serviceInstance.setLanguage(Language.UNKNOWN);
+                        serviceInstance.getAttributes().add(new Attribute(key, value));
                     }
 
-                    serviceInstances.add(serviceInstance);
                 }
+            } else {
+                serviceInstance.setLanguage(Language.UNKNOWN);
             }
-        } catch (SQLException e) {
-            throw new IOException(e);
+
+            serviceInstances.add(serviceInstance);
         }
         return serviceInstances;
     }
 
-    private void setTimeRangeCondition(StringBuilder sql, List<Object> conditions, long startTimestamp,
-        long endTimestamp) {
-        sql.append(" ( (").append(RegisterSource.HEARTBEAT_TIME).append(" >= ? and ")
-            .append(RegisterSource.REGISTER_TIME).append(" <= ? )");
-        conditions.add(endTimestamp);
-        conditions.add(endTimestamp);
-        sql.append(" or (").append(RegisterSource.REGISTER_TIME).append(" <= ? and ")
-            .append(RegisterSource.HEARTBEAT_TIME).append(" >= ? ) ) ");
-        conditions.add(endTimestamp);
-        conditions.add(startTimestamp);
+    @Override
+    public List<Process> listProcesses(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
+                                       final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+        StringBuilder sql = new StringBuilder();
+        List<Object> condition = new ArrayList<>(3);
+        sql.append("select * from ").append(ProcessTraffic.INDEX_NAME);
+        appendProcessWhereQuery(sql, condition, serviceId, instanceId, agentId, profilingSupportStatus,
+                lastPingStartTimeBucket, lastPingEndTimeBucket);
+        sql.append(" limit ").append(metadataQueryMaxSize);
+
+        try (Connection connection = h2Client.getConnection()) {
+            try (ResultSet resultSet = h2Client.executeQuery(
+                    connection, sql.toString(), condition.toArray(new Object[0]))) {
+                return buildProcesses(resultSet);
+            }
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
     }
 
-    private List<Service> buildServices(ResultSet resultSet) throws SQLException {
-        List<Service> services = new ArrayList<>();
-        while (resultSet.next()) {
-            Service service = new Service();
-            service.setId(resultSet.getInt(ServiceInventory.SEQUENCE));
-            service.setName(resultSet.getString(ServiceInventory.NAME));
-            services.add(service);
+    @Override
+    public long getProcessesCount(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
+                                  final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+        StringBuilder sql = new StringBuilder();
+        List<Object> condition = new ArrayList<>(3);
+        sql.append("select count(1) total from ").append(ProcessTraffic.INDEX_NAME);
+        appendProcessWhereQuery(sql, condition, serviceId, instanceId, agentId, profilingSupportStatus,
+                lastPingStartTimeBucket, lastPingEndTimeBucket);
+
+        try (Connection connection = h2Client.getConnection()) {
+            try (ResultSet resultSet = h2Client.executeQuery(
+                    connection, sql.toString(), condition.toArray(new Object[0]))) {
+                if (!resultSet.next()) {
+                    return 0;
+                }
+                return resultSet.getLong("total");
+            }
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    private void appendProcessWhereQuery(StringBuilder sql, List<Object> condition, String serviceId, String instanceId,
+                                         String agentId, final ProfilingSupportStatus profilingSupportStatus,
+                                         final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) {
+        if (StringUtil.isNotEmpty(serviceId) || StringUtil.isNotEmpty(instanceId) || StringUtil.isNotEmpty(agentId)) {
+            sql.append(" where ");
         }
 
-        return services;
+        if (StringUtil.isNotEmpty(serviceId)) {
+            sql.append(ProcessTraffic.SERVICE_ID).append("=?");
+            condition.add(serviceId);
+        }
+        if (StringUtil.isNotEmpty(instanceId)) {
+            if (!condition.isEmpty()) {
+                sql.append(" and ");
+            }
+            sql.append(ProcessTraffic.INSTANCE_ID).append("=?");
+            condition.add(instanceId);
+        }
+        if (StringUtil.isNotEmpty(agentId)) {
+            if (!condition.isEmpty()) {
+                sql.append(" and ");
+            }
+            sql.append(ProcessTraffic.AGENT_ID).append("=?");
+            condition.add(agentId);
+        }
+        if (profilingSupportStatus != null) {
+            if (!condition.isEmpty()) {
+                sql.append(" and ");
+            }
+            sql.append(ProcessTraffic.PROFILING_SUPPORT_STATUS).append("=?");
+            condition.add(profilingSupportStatus.value());
+        }
+        if (lastPingStartTimeBucket > 0) {
+            if (!condition.isEmpty()) {
+                sql.append(" and ");
+            }
+            sql.append(ProcessTraffic.LAST_PING_TIME_BUCKET).append(">=?");
+            condition.add(lastPingStartTimeBucket);
+        }
+        if (lastPingEndTimeBucket > 0) {
+            if (!condition.isEmpty()) {
+                sql.append(" and ");
+            }
+            sql.append(ProcessTraffic.LAST_PING_TIME_BUCKET).append("<=?");
+            condition.add(lastPingEndTimeBucket);
+        }
+        if (!condition.isEmpty()) {
+            sql.append(" and ");
+        }
+        sql.append(ProcessTraffic.DETECT_TYPE).append("!=?");
+        condition.add(ProcessDetectType.VIRTUAL.value());
+    }
+
+    @Override
+    public Process getProcess(String processId) throws IOException {
+        StringBuilder sql = new StringBuilder();
+        List<Object> condition = new ArrayList<>(5);
+        sql.append("select * from ").append(ProcessTraffic.INDEX_NAME).append(" where ");
+        sql.append(H2TableInstaller.ID_COLUMN).append(" = ?");
+        condition.add(processId);
+        sql.append(" limit ").append(metadataQueryMaxSize);
+
+        try (Connection connection = h2Client.getConnection()) {
+            ResultSet resultSet = h2Client.executeQuery(
+                    connection, sql.toString(), condition.toArray(new Object[0]));
+            final List<Process> processes = buildProcesses(resultSet);
+            return processes.size() > 0 ? processes.get(0) : null;
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    private List<Process> buildProcesses(ResultSet resultSet) throws SQLException {
+        List<Process> processes = new ArrayList<>();
+        while (resultSet.next()) {
+            final Process process = new Process();
+            process.setId(resultSet.getString(H2TableInstaller.ID_COLUMN));
+            process.setName(resultSet.getString(ProcessTraffic.NAME));
+            final String serviceId = resultSet.getString(ProcessTraffic.SERVICE_ID);
+            process.setServiceId(serviceId);
+            final IDManager.ServiceID.ServiceIDDefinition serviceIDDefinition = IDManager.ServiceID.analysisId(serviceId);
+            process.setServiceName(serviceIDDefinition.getName());
+            final String instanceId = resultSet.getString(ProcessTraffic.INSTANCE_ID);
+            process.setInstanceId(instanceId);
+            final IDManager.ServiceInstanceID.InstanceIDDefinition instanceIDDefinition = IDManager.ServiceInstanceID.analysisId(instanceId);
+            process.setInstanceName(instanceIDDefinition.getName());
+            process.setAgentId(resultSet.getString(ProcessTraffic.AGENT_ID));
+            process.setDetectType(ProcessDetectType.valueOf(resultSet.getInt(ProcessTraffic.DETECT_TYPE)).name());
+            String propertiesString = resultSet.getString(ProcessTraffic.PROPERTIES);
+            if (!Strings.isNullOrEmpty(propertiesString)) {
+                JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
+                for (Map.Entry<String, JsonElement> property : properties.entrySet()) {
+                    String key = property.getKey();
+                    String value = property.getValue().getAsString();
+                    process.getAttributes().add(new Attribute(key, value));
+                }
+            }
+            final String labelJsonString = resultSet.getString(ProcessTraffic.LABELS_JSON);
+            if (!Strings.isNullOrEmpty(labelJsonString)) {
+                List<String> labels = GSON.<List<String>>fromJson(labelJsonString, ArrayList.class);
+                process.getLabels().addAll(labels);
+            }
+
+            processes.add(process);
+        }
+        return processes;
     }
 }

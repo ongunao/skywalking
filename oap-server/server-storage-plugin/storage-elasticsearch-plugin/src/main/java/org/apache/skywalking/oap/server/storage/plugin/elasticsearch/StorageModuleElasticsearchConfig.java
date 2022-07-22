@@ -18,39 +18,128 @@
 
 package org.apache.skywalking.oap.server.storage.plugin.elasticsearch;
 
-import lombok.*;
+import lombok.Getter;
+import lombok.Setter;
+import org.apache.skywalking.oap.server.core.storage.annotation.ElasticSearch;
+import org.apache.skywalking.oap.server.core.storage.annotation.SuperDataset;
 import org.apache.skywalking.oap.server.library.module.ModuleConfig;
 
-/**
- * @author peng-yongsheng
- */
 @Getter
+@Setter
 public class StorageModuleElasticsearchConfig extends ModuleConfig {
-    @Setter private String nameSpace;
-    @Setter private String clusterNodes;
-    @Setter private int indexShardsNumber;
-    @Setter private int indexReplicasNumber;
-    @Setter private boolean highPerformanceMode;
-    @Setter private int bulkActions = 2000;
-    @Setter private int bulkSize = 20;
-    @Setter private int flushInterval = 10;
-    @Setter private int concurrentRequests = 2;
-    @Setter private String user;
-    @Setter private String password;
-    @Setter private int metadataQueryMaxSize = 5000;
-    @Setter private int segmentQueryMaxSize = 200;
-    @Setter private int recordDataTTL = 7;
-    @Setter private int minuteMetricsDataTTL = 2;
-    @Setter private int hourMetricsDataTTL = 2;
-    @Setter private int dayMetricsDataTTL = 2;
-    private int otherMetricsDataTTL = 0;
-    @Setter private int monthMetricsDataTTL = 18;
+    private String namespace;
+    private String clusterNodes;
+    String protocol = "http";
+    /**
+     * Connect timeout of ElasticSearch client.
+     *
+     * @since 8.7.0
+     */
+    private int connectTimeout = 3000;
+    /**
+     * Socket timeout of ElasticSearch client.
+     *
+     * @since 8.7.0
+     */
+    private int socketTimeout = 30000;
+    /**
+     * @since 9.0.0 the response timeout of ElasticSearch client (Armeria under the hood), set to 0 to disable response
+     * timeout.
+     */
+    private int responseTimeout = 15000;
+    /**
+     * @since 6.4.0, the index of metrics and traces data in minute/hour/month precision are organized in days. ES
+     * storage creates new indexes in every day.
+     *
+     * @since 7.0.0 dayStep represents how many days a single one index represents. Default is 1, meaning no difference
+     * with previous versions. But if there isn't much traffic for single one day, user could set the step larger to
+     * reduce the number of indexes, and keep the TTL longer.
+     */
+    private int dayStep = 1;
+    private int indexReplicasNumber = 0;
+    private int indexShardsNumber = 1;
+    /**
+     * @since 8.2.0, the record day step is for super size dataset record index rolling when the value of it is greater
+     * than 0
+     */
+    private int superDatasetDayStep = -1;
+    /**
+     * @see SuperDataset
+     * @since 8.2.0, the replicas number is for super size dataset record replicas number
+     */
+    private int superDatasetIndexReplicasNumber = 0;
+    private int superDatasetIndexShardsFactor = 5;
+    private int indexRefreshInterval = 2;
 
-    public void setOtherMetricsDataTTL(int otherMetricsDataTTL) {
-        if (otherMetricsDataTTL > 0) {
-            minuteMetricsDataTTL = otherMetricsDataTTL;
-            hourMetricsDataTTL = otherMetricsDataTTL;
-            dayMetricsDataTTL = otherMetricsDataTTL;
-        }
-    }
+    /**
+     * @since 8.7.0 The order of index template.
+     */
+    private int indexTemplateOrder = 0;
+
+    /**
+     * @since 8.7.0 This setting affects all traces/logs/metrics/metadata flush policy.
+     */
+    private int bulkActions = 5000;
+    /**
+     * Period of flush, no matter `bulkActions` reached or not.
+     * INT(flushInterval * 2/3) would be used for index refresh period.
+     * Unit is second.
+     *
+     * @since 8.7.0 increase to 15s from 10s
+     * @since 8.7.0 use INT(flushInterval * 2/3) as ElasticSearch index refresh interval. Default is 10s.
+     */
+    private int flushInterval = 15;
+    private int concurrentRequests = 2;
+    /**
+     * @since 7.0.0 This could be managed inside {@link #secretsManagementFile}
+     */
+    private String user;
+    /**
+     * @since 7.0.0 This could be managed inside {@link #secretsManagementFile}
+     */
+    private String password;
+    /**
+     * Secrets management file includes the username, password, which are managed by 3rd party tool.
+     */
+    private String secretsManagementFile;
+    private String trustStorePath;
+    /**
+     * @since 7.0.0 This could be managed inside {@link #secretsManagementFile}
+     */
+    private String trustStorePass;
+    private int resultWindowMaxSize = 10000;
+    private int metadataQueryMaxSize = 5000;
+    /**
+     * @since 9.0.0 The batch size that is used to scroll on the large results,
+     * if {@link #metadataQueryMaxSize} is larger than the maximum result window in
+     * ElasticSearch server, this can be used to retrieve all results.
+     */
+    private int scrollingBatchSize = 5000;
+    private int segmentQueryMaxSize = 200;
+    private int profileTaskQueryMaxSize = 200;
+    /**
+     * The batch size that is used to scroll on the large eBPF profiling data result.
+     * The profiling data contains full-stack symbol data, which could make ElasticSearch response large content.
+     * {@link #scrollingBatchSize} would not be used in profiling data query.
+     */
+    private int profileDataQueryBatchSize = 100;
+    /**
+     * The default analyzer for match query field. {@link ElasticSearch.MatchQuery.AnalyzerType#OAP_ANALYZER}
+     *
+     * @since 8.4.0
+     */
+    private String oapAnalyzer = "{\"analyzer\":{\"oap_analyzer\":{\"type\":\"stop\"}}}";
+    /**
+     * The log analyzer for match query field. {@link ElasticSearch.MatchQuery.AnalyzerType#OAP_LOG_ANALYZER}
+     *
+     * @since 8.4.0
+     */
+    private String oapLogAnalyzer = "{\"analyzer\":{\"oap_log_analyzer\":{\"type\":\"standard\"}}}";
+    private String advanced;
+
+    /**
+     * The number of threads for the underlying HTTP client to perform socket I/O.
+     * If the value is <= 0, the number of available processors will be used.
+     */
+    private int numHttpClientThread;
 }

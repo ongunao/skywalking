@@ -22,15 +22,24 @@ import lombok.Getter;
 import lombok.Setter;
 import org.apache.skywalking.oap.server.library.module.ModuleConfig;
 
-/**
- * @author wusheng
- */
 @Setter
 @Getter
 public class H2StorageConfig extends ModuleConfig {
     private String driver = "org.h2.jdbcx.JdbcDataSource";
-    private String url = "jdbc:h2:mem:collector";
+    private String url = "jdbc:h2:mem:skywalking-oap-db;DB_CLOSE_DELAY=-1";
     private String user = "";
     private String password = "";
     private int metadataQueryMaxSize = 5000;
+    /**
+     * The maximum size of batch size of SQL execution
+     *
+     * @since 8.8.0
+     */
+    private int maxSizeOfBatchSql = 100;
+    /**
+     * async batch execute pool size
+     *
+     * @since 8.8.0
+     */
+    private int asyncBatchPersistentPoolSize  = 1;
 }

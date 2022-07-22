@@ -18,20 +18,92 @@
 
 package org.apache.skywalking.oap.server.core.storage.model;
 
+import java.lang.reflect.Type;
 import lombok.Getter;
+import lombok.ToString;
+import org.apache.skywalking.oap.server.core.analysis.metrics.DataTable;
 
-/**
- * @author peng-yongsheng
- */
 @Getter
+@ToString
 public class ModelColumn {
     private final ColumnName columnName;
     private final Class<?> type;
-    private final boolean matchQuery;
+    private final Type genericType;
+    /**
+     * Storage this column for query result, but can't be as a condition . Conflict with {@link #indexOnly}
+     */
+    private final boolean storageOnly;
+    /**
+     * Index this column for query condition only. Conflict with {@link #storageOnly}
+     *
+     * @since 9.0.0
+     */
+    private final boolean indexOnly;
+    /**
+     * The max length of column value for length sensitive database.
+     */
+    private final int length;
 
-    public ModelColumn(ColumnName columnName, Class<?> type, boolean matchQuery) {
+    /**
+     * Hold configurations especially for SQL Database, such as MySQL, H2, PostgreSQL
+     *
+     * @since 9.1.0
+     */
+    private SQLDatabaseExtension sqlDatabaseExtension;
+    /**
+     * Hold configurations especially for ElasticSearch
+     *
+     * @since 9.1.0
+     */
+    private ElasticSearchExtension elasticSearchExtension;
+    /**
+     * Hold configurations especially for BanyanDB relevant
+     *
+     * @since 9.1.0
+     */
+    private BanyanDBExtension banyanDBExtension;
+
+    public ModelColumn(ColumnName columnName,
+                       Class<?> type,
+                       Type genericType,
+                       boolean storageOnly,
+                       boolean indexOnly,
+                       boolean isValue,
+                       int length,
+                       SQLDatabaseExtension sqlDatabaseExtension,
+                       ElasticSearchExtension elasticSearchExtension,
+                       BanyanDBExtension banyanDBExtension) {
         this.columnName = columnName;
         this.type = type;
-        this.matchQuery = matchQuery;
+        this.genericType = genericType;
+        this.length = length;
+        this.sqlDatabaseExtension = sqlDatabaseExtension;
+        this.elasticSearchExtension = elasticSearchExtension;
+        /*
+         * byte[] and {@link IntKeyLongValueHashMap} could never be queried.
+         */
+        if (type.equals(byte[].class) || type.equals(DataTable.class)) {
+            this.storageOnly = true;
+        } else {
+            if (storageOnly && isValue) {
+                throw new IllegalArgumentException(
+                    "The column " + columnName + " can't be defined as both isValue and storageOnly.");
+            }
+            this.storageOnly = storageOnly;
+        }
+
+        if (storageOnly && indexOnly) {
+            throw new IllegalArgumentException(
+                "The column " + columnName + " can't be defined as both indexOnly and storageOnly.");
+        }
+        this.indexOnly = indexOnly;
+        this.banyanDBExtension = banyanDBExtension;
+    }
+
+    /**
+     * @return true means this column should be indexed, as it would be a query condition.
+     */
+    public boolean shouldIndex() {
+        return !storageOnly;
     }
 }

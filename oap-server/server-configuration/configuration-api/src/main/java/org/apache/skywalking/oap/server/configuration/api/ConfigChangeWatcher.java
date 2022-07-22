@@ -18,24 +18,26 @@
 
 package org.apache.skywalking.oap.server.configuration.api;
 
-import lombok.*;
-import org.apache.skywalking.oap.server.library.module.*;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
+import org.apache.skywalking.oap.server.library.module.ModuleProvider;
 
 /**
  * ConfigChangeWatcher represents a watcher implementor, it will be called when the target value changed.
- *
- * @author wusheng
  */
 @Getter
 public abstract class ConfigChangeWatcher {
     private final String module;
     private final ModuleProvider provider;
     private final String itemName;
+    protected WatchType watchType;
 
     public ConfigChangeWatcher(String module, ModuleProvider provider, String itemName) {
         this.module = module;
         this.provider = provider;
         this.itemName = itemName;
+        this.watchType = WatchType.SINGLE;
     }
 
     /**
@@ -50,12 +52,9 @@ public abstract class ConfigChangeWatcher {
      */
     public abstract String value();
 
-    @Override public String toString() {
-        return "ConfigChangeWatcher{" +
-            "module=" + module +
-            ", provider=" + provider +
-            ", itemName='" + itemName + '\'' +
-            '}';
+    @Override
+    public String toString() {
+        return "ConfigChangeWatcher{" + "module=" + module + ", provider=" + provider + ", itemName='" + itemName + '\'' + '}';
     }
 
     @Setter(AccessLevel.PACKAGE)
@@ -64,8 +63,7 @@ public abstract class ConfigChangeWatcher {
         private String newValue;
         private EventType eventType;
 
-        public ConfigChangeEvent(String newValue,
-            EventType eventType) {
+        public ConfigChangeEvent(String newValue, EventType eventType) {
             this.newValue = newValue;
             this.eventType = eventType;
         }
@@ -73,5 +71,9 @@ public abstract class ConfigChangeWatcher {
 
     public enum EventType {
         ADD, MODIFY, DELETE
+    }
+
+    public enum WatchType {
+        SINGLE, GROUP
     }
 }

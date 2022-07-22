@@ -18,20 +18,41 @@
 
 package org.apache.skywalking.oap.server.receiver.sharing.server;
 
-import lombok.*;
+import lombok.Getter;
+import lombok.Setter;
 import org.apache.skywalking.oap.server.library.module.ModuleConfig;
 
-/**
- * @author peng-yongsheng
- */
 @Getter
 @Setter
 public class SharingServerConfig extends ModuleConfig {
     private String restHost;
+    /**
+     * Only setting the real port(not 0) makes the Armeria server online.
+     */
     private int restPort;
     private String restContextPath;
+    private int restMaxThreads = 200;
+    private long restIdleTimeOut = 30000;
+    private int restAcceptQueueSize = 0;
+
     private String gRPCHost;
+    /**
+     * Only setting the real port(not 0) makes the gRPC server online.
+     */
     private int gRPCPort;
     private int maxConcurrentCallsPerConnection;
     private int maxMessageSize;
+    private int gRPCThreadPoolSize;
+    private int gRPCThreadPoolQueueSize;
+    private String authentication;
+    private boolean gRPCSslEnabled = false;
+    private String gRPCSslKeyPath;
+    private String gRPCSslCertChainPath;
+    private String gRPCSslTrustedCAsPath;
+
+    /**
+     * The maximum size in bytes allowed for request headers.
+     * Use -1 to disable it.
+     */
+    private int httpMaxRequestHeaderSize = 8192;
 }

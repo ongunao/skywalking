@@ -20,44 +20,113 @@ package org.apache.skywalking.oap.server.storage.plugin.jdbc.h2.dao;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.skywalking.oap.server.library.datacarrier.DataCarrier;
+import org.apache.skywalking.oap.server.library.datacarrier.consumer.IConsumer;
 import org.apache.skywalking.oap.server.core.storage.IBatchDAO;
 import org.apache.skywalking.oap.server.library.client.jdbc.JDBCClientException;
 import org.apache.skywalking.oap.server.library.client.jdbc.hikaricp.JDBCHikariCPClient;
+import org.apache.skywalking.oap.server.library.client.request.InsertRequest;
+import org.apache.skywalking.oap.server.library.client.request.PrepareRequest;
+import org.apache.skywalking.oap.server.library.util.CollectionUtils;
+import org.apache.skywalking.oap.server.storage.plugin.jdbc.BatchSQLExecutor;
 import org.apache.skywalking.oap.server.storage.plugin.jdbc.SQLExecutor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-/**
- * @author wusheng
- */
+@Slf4j
 public class H2BatchDAO implements IBatchDAO {
-    private static final Logger logger = LoggerFactory.getLogger(H2BatchDAO.class);
-
     private JDBCHikariCPClient h2Client;
+    private final DataCarrier<PrepareRequest> dataCarrier;
+    private final int maxBatchSqlSize;
 
-    public H2BatchDAO(JDBCHikariCPClient h2Client) {
+    public H2BatchDAO(JDBCHikariCPClient h2Client, int maxBatchSqlSize, int asyncBatchPersistentPoolSize) {
         this.h2Client = h2Client;
+        String name = "H2_ASYNCHRONOUS_BATCH_PERSISTENT";
+        if (log.isDebugEnabled()) {
+            log.debug("H2_ASYNCHRONOUS_BATCH_PERSISTENT poolSize: {}, maxBatchSqlSize:{}", asyncBatchPersistentPoolSize, maxBatchSqlSize);
+        }
+        this.maxBatchSqlSize = maxBatchSqlSize;
+        this.dataCarrier = new DataCarrier<>(name, asyncBatchPersistentPoolSize, 10000);
+        this.dataCarrier.consume(new H2BatchDAO.H2BatchConsumer(this), asyncBatchPersistentPoolSize, 20);
     }
 
-    @Override public void batchPersistence(List<?> batchCollection) {
-        if (batchCollection.size() == 0) {
-            return;
+    @Override
+    public CompletableFuture<Void> flush(List<PrepareRequest> prepareRequests) {
+        if (CollectionUtils.isEmpty(prepareRequests)) {
+            return CompletableFuture.completedFuture(null);
         }
 
-        if (logger.isDebugEnabled()) {
-            logger.debug("batch sql statements execute, data size: {}", batchCollection.size());
-        }
-
-        try (Connection connection = h2Client.getConnection()) {
-            for (Object exe : batchCollection) {
-                SQLExecutor sqlExecutor = (SQLExecutor)exe;
-                sqlExecutor.invoke(connection);
+        List<PrepareRequest> sqls = new ArrayList<>();
+        prepareRequests.forEach(prepareRequest -> {
+            sqls.add(prepareRequest);
+            SQLExecutor sqlExecutor = (SQLExecutor) prepareRequest;
+            if (!CollectionUtils.isEmpty(sqlExecutor.getAdditionalSQLs())) {
+                sqls.addAll(sqlExecutor.getAdditionalSQLs());
             }
-        } catch (SQLException e) {
-            logger.error(e.getMessage(), e);
-        } catch (JDBCClientException e) {
-            logger.error(e.getMessage(), e);
+        });
+
+        if (log.isDebugEnabled()) {
+            log.debug("to execute sql statements execute, data size: {}, maxBatchSqlSize: {}", sqls.size(), maxBatchSqlSize);
+        }
+
+        final Map<PrepareRequest, List<PrepareRequest>> batchRequestMap =
+            sqls.stream().collect(Collectors.groupingBy(Function.identity()));
+        try (Connection connection = h2Client.getConnection()) {
+            batchRequestMap.forEach((key, requests) -> {
+                try {
+                    BatchSQLExecutor batchSQLExecutor =
+                            new BatchSQLExecutor(requests);
+                    batchSQLExecutor.invoke(connection, maxBatchSqlSize);
+                } catch (SQLException e) {
+                    // Just avoid one execution failure makes the rest of batch failure.
+                    log.error(e.getMessage(), e);
+                }
+            });
+        } catch (SQLException | JDBCClientException e) {
+            log.warn("execute sql failed, discard data size: {}", prepareRequests.size(), e);
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("execute sql statements done, data size: {}, maxBatchSqlSize: {}", prepareRequests.size(), maxBatchSqlSize);
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public void insert(InsertRequest insertRequest) {
+        this.dataCarrier.produce(insertRequest);
+    }
+
+    private class H2BatchConsumer implements IConsumer<PrepareRequest> {
+
+        private final H2BatchDAO h2BatchDAO;
+
+        private H2BatchConsumer(H2BatchDAO h2BatchDAO) {
+            this.h2BatchDAO = h2BatchDAO;
+        }
+
+        @Override
+        public void init(final Properties properties) {
+
+        }
+
+        @Override
+        public void consume(List<PrepareRequest> prepareRequests) {
+            h2BatchDAO.flush(prepareRequests);
+        }
+
+        @Override
+        public void onError(List<PrepareRequest> prepareRequests, Throwable t) {
+            log.error(t.getMessage(), t);
+        }
+
+        @Override
+        public void onExit() {
         }
     }
 }

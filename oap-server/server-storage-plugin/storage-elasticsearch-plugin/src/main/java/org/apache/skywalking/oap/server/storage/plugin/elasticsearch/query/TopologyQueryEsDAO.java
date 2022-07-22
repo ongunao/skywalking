@@ -19,29 +19,33 @@
 package org.apache.skywalking.oap.server.storage.plugin.elasticsearch.query;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import org.apache.skywalking.library.elasticsearch.requests.search.BoolQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Query;
+import org.apache.skywalking.library.elasticsearch.requests.search.Search;
+import org.apache.skywalking.library.elasticsearch.requests.search.SearchBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.aggregation.Aggregation;
+import org.apache.skywalking.library.elasticsearch.requests.search.aggregation.TermsAggregationBuilder;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchResponse;
 import org.apache.skywalking.oap.server.core.UnexpectedException;
-import org.apache.skywalking.oap.server.core.analysis.Downsampling;
-import org.apache.skywalking.oap.server.core.analysis.manual.RelationDefineUtil;
-import org.apache.skywalking.oap.server.core.analysis.manual.endpointrelation.EndpointRelationServerSideMetrics;
-import org.apache.skywalking.oap.server.core.analysis.manual.servicerelation.*;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.endpoint.EndpointRelationServerSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.instance.ServiceInstanceRelationClientSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.instance.ServiceInstanceRelationServerSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationClientSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationServerSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.service.ServiceRelationClientSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.service.ServiceRelationServerSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
-import org.apache.skywalking.oap.server.core.query.entity.Call;
+import org.apache.skywalking.oap.server.core.query.type.Call;
 import org.apache.skywalking.oap.server.core.source.DetectPoint;
-import org.apache.skywalking.oap.server.core.storage.model.ModelName;
 import org.apache.skywalking.oap.server.core.storage.query.ITopologyQueryDAO;
 import org.apache.skywalking.oap.server.library.client.elasticsearch.ElasticSearchClient;
 import org.apache.skywalking.oap.server.library.util.CollectionUtils;
 import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.EsDAO;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.index.query.*;
-import org.elasticsearch.search.aggregations.AggregationBuilders;
-import org.elasticsearch.search.aggregations.bucket.terms.Terms;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.IndexController;
 
-/**
- * @author peng-yongsheng
- */
 public class TopologyQueryEsDAO extends EsDAO implements ITopologyQueryDAO {
 
     public TopologyQueryEsDAO(ElasticSearchClient client) {
@@ -49,108 +53,340 @@ public class TopologyQueryEsDAO extends EsDAO implements ITopologyQueryDAO {
     }
 
     @Override
-    public List<Call.CallDetail> loadSpecifiedServerSideServiceRelations(Downsampling downsampling, long startTB, long endTB, List<Integer> serviceIds) throws IOException {
+    public List<Call.CallDetail> loadServiceRelationsDetectedAtServerSide(
+        long startTB, long endTB, List<String> serviceIds) {
         if (CollectionUtils.isEmpty(serviceIds)) {
             throw new UnexpectedException("Service id is empty");
         }
 
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        sourceBuilder.size(0);
+        final SearchBuilder sourceBuilder = Search.builder().size(0);
         setQueryCondition(sourceBuilder, startTB, endTB, serviceIds);
 
-        String indexName = ModelName.build(downsampling, ServiceRelationServerSideMetrics.INDEX_NAME);
-        return load(sourceBuilder, indexName, DetectPoint.SERVER);
+        return buildServiceRelation(
+            sourceBuilder, ServiceRelationServerSideMetrics.INDEX_NAME, DetectPoint.SERVER);
     }
 
     @Override
-    public List<Call.CallDetail> loadSpecifiedClientSideServiceRelations(Downsampling downsampling, long startTB, long endTB, List<Integer> serviceIds) throws IOException {
+    public List<Call.CallDetail> loadServiceRelationDetectedAtClientSide(long startTB,
+                                                                         long endTB,
+                                                                         List<String> serviceIds) {
         if (CollectionUtils.isEmpty(serviceIds)) {
             throw new UnexpectedException("Service id is empty");
         }
 
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        sourceBuilder.size(0);
+        final SearchBuilder sourceBuilder = Search.builder().size(0);
         setQueryCondition(sourceBuilder, startTB, endTB, serviceIds);
 
-        String indexName = ModelName.build(downsampling, ServiceRelationClientSideMetrics.INDEX_NAME);
-        return load(sourceBuilder, indexName, DetectPoint.CLIENT);
-    }
-
-    private void setQueryCondition(SearchSourceBuilder sourceBuilder, long startTB, long endTB, List<Integer> serviceIds) {
-        BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
-        boolQuery.must().add(QueryBuilders.rangeQuery(ServiceRelationServerSideMetrics.TIME_BUCKET).gte(startTB).lte(endTB));
-
-        BoolQueryBuilder serviceIdBoolQuery = QueryBuilders.boolQuery();
-        boolQuery.must().add(serviceIdBoolQuery);
-
-        if (serviceIds.size() == 1) {
-            serviceIdBoolQuery.should().add(QueryBuilders.termQuery(ServiceRelationServerSideMetrics.SOURCE_SERVICE_ID, serviceIds.get(0)));
-            serviceIdBoolQuery.should().add(QueryBuilders.termQuery(ServiceRelationServerSideMetrics.DEST_SERVICE_ID, serviceIds.get(0)));
-        } else {
-            serviceIdBoolQuery.should().add(QueryBuilders.termsQuery(ServiceRelationServerSideMetrics.SOURCE_SERVICE_ID, serviceIds));
-            serviceIdBoolQuery.should().add(QueryBuilders.termsQuery(ServiceRelationServerSideMetrics.DEST_SERVICE_ID, serviceIds));
-        }
-        sourceBuilder.query(boolQuery);
-    }
-
-    @Override public List<Call.CallDetail> loadServerSideServiceRelations(Downsampling downsampling, long startTB, long endTB) throws IOException {
-        String indexName = ModelName.build(downsampling, ServiceRelationServerSideMetrics.INDEX_NAME);
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        sourceBuilder.query(QueryBuilders.rangeQuery(ServiceRelationServerSideMetrics.TIME_BUCKET).gte(startTB).lte(endTB));
-        sourceBuilder.size(0);
-
-        return load(sourceBuilder, indexName, DetectPoint.SERVER);
-    }
-
-    @Override public List<Call.CallDetail> loadClientSideServiceRelations(Downsampling downsampling, long startTB, long endTB) throws IOException {
-        String indexName = ModelName.build(downsampling, ServiceRelationClientSideMetrics.INDEX_NAME);
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        sourceBuilder.query(QueryBuilders.rangeQuery(ServiceRelationServerSideMetrics.TIME_BUCKET).gte(startTB).lte(endTB));
-        sourceBuilder.size(0);
-
-        return load(sourceBuilder, indexName, DetectPoint.CLIENT);
+        return buildServiceRelation(
+            sourceBuilder, ServiceRelationClientSideMetrics.INDEX_NAME, DetectPoint.CLIENT);
     }
 
     @Override
-    public List<Call.CallDetail> loadSpecifiedDestOfServerSideEndpointRelations(Downsampling downsampling, long startTB, long endTB, int destEndpointId) throws IOException {
-        String indexName = ModelName.build(downsampling, EndpointRelationServerSideMetrics.INDEX_NAME);
+    public List<Call.CallDetail> loadServiceRelationsDetectedAtServerSide(long startTB,
+                                                                          long endTB) {
+        SearchBuilder sourceBuilder = Search.builder();
+        sourceBuilder.query(Query.range(ServiceRelationServerSideMetrics.TIME_BUCKET)
+                                 .gte(startTB)
+                                 .lte(endTB))
+                     .size(0);
 
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
+        return buildServiceRelation(
+            sourceBuilder, ServiceRelationServerSideMetrics.INDEX_NAME, DetectPoint.SERVER);
+    }
+
+    @Override
+    public List<Call.CallDetail> loadServiceRelationDetectedAtClientSide(long startTB,
+                                                                         long endTB) {
+        SearchBuilder sourceBuilder = Search.builder();
+        sourceBuilder.query(Query.range(ServiceRelationServerSideMetrics.TIME_BUCKET)
+                                 .gte(startTB)
+                                 .lte(endTB))
+                     .size(0);
+
+        return buildServiceRelation(
+            sourceBuilder, ServiceRelationClientSideMetrics.INDEX_NAME, DetectPoint.CLIENT);
+    }
+
+    @Override
+    public List<Call.CallDetail> loadInstanceRelationDetectedAtServerSide(String clientServiceId,
+                                                                          String serverServiceId,
+                                                                          long startTB,
+                                                                          long endTB) {
+        final SearchBuilder search = Search.builder().size(0);
+        setInstanceQueryCondition(search, startTB, endTB, clientServiceId, serverServiceId);
+
+        return buildInstanceRelation(
+            search, ServiceInstanceRelationServerSideMetrics.INDEX_NAME, DetectPoint.SERVER);
+    }
+
+    @Override
+    public List<Call.CallDetail> loadInstanceRelationDetectedAtClientSide(String clientServiceId,
+                                                                          String serverServiceId,
+                                                                          long startTB,
+                                                                          long endTB) {
+        final SearchBuilder search = Search.builder().size(0);
+        setInstanceQueryCondition(search, startTB, endTB, clientServiceId, serverServiceId);
+
+        return buildInstanceRelation(
+            search, ServiceInstanceRelationClientSideMetrics.INDEX_NAME, DetectPoint.CLIENT);
+    }
+
+    private void setInstanceQueryCondition(SearchBuilder search, long startTB, long endTB,
+                                           String clientServiceId, String serverServiceId) {
+        final BoolQueryBuilder serverRelationBoolQuery =
+            Query.bool()
+                 .must(
+                     Query.term(
+                         ServiceInstanceRelationServerSideMetrics.SOURCE_SERVICE_ID,
+                         clientServiceId
+                     ))
+                 .must(
+                     Query.term(
+                         ServiceInstanceRelationServerSideMetrics.DEST_SERVICE_ID,
+                         serverServiceId
+                     ));
+
+        final BoolQueryBuilder clientRelationBoolQuery =
+            Query.bool()
+                 .must(
+                     Query.term(
+                         ServiceInstanceRelationServerSideMetrics.DEST_SERVICE_ID,
+                         clientServiceId
+                     ))
+                 .must(
+                     Query.term(
+                         ServiceInstanceRelationServerSideMetrics.SOURCE_SERVICE_ID,
+                         serverServiceId
+                     ));
+
+        final BoolQueryBuilder serviceIdBoolQuery =
+            Query.bool()
+                 .should(serverRelationBoolQuery)
+                 .should(clientRelationBoolQuery);
+
+        final BoolQueryBuilder boolQuery =
+            Query.bool()
+                 .must(Query.range(EndpointRelationServerSideMetrics.TIME_BUCKET)
+                            .gte(startTB)
+                            .lte(endTB))
+                 .must(serviceIdBoolQuery);
+
+        search.query(boolQuery);
+    }
+
+    @Override
+    public List<Call.CallDetail> loadEndpointRelation(long startTB, long endTB,
+                                                      String destEndpointId) {
+        SearchBuilder sourceBuilder = Search.builder();
         sourceBuilder.size(0);
 
-        BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
-        boolQuery.must().add(QueryBuilders.rangeQuery(EndpointRelationServerSideMetrics.TIME_BUCKET).gte(startTB).lte(endTB));
+        BoolQueryBuilder boolQuery = Query.bool();
+        boolQuery.must(
+            Query.range(EndpointRelationServerSideMetrics.TIME_BUCKET)
+                 .gte(startTB).lte(endTB));
 
-        BoolQueryBuilder serviceIdBoolQuery = QueryBuilders.boolQuery();
-        boolQuery.must().add(serviceIdBoolQuery);
-        serviceIdBoolQuery.should().add(QueryBuilders.termQuery(EndpointRelationServerSideMetrics.SOURCE_ENDPOINT_ID, destEndpointId));
-        serviceIdBoolQuery.should().add(QueryBuilders.termQuery(EndpointRelationServerSideMetrics.DEST_ENDPOINT_ID, destEndpointId));
+        BoolQueryBuilder serviceIdBoolQuery = Query.bool();
+        boolQuery.must(serviceIdBoolQuery);
+        serviceIdBoolQuery.should(
+            Query.term(
+                EndpointRelationServerSideMetrics.SOURCE_ENDPOINT, destEndpointId
+            ));
+        serviceIdBoolQuery.should(
+            Query.term(
+                EndpointRelationServerSideMetrics.DEST_ENDPOINT, destEndpointId
+            ));
 
         sourceBuilder.query(boolQuery);
 
-        return load(sourceBuilder, indexName, DetectPoint.SERVER);
+        return loadEndpoint(
+            sourceBuilder, EndpointRelationServerSideMetrics.INDEX_NAME, DetectPoint.SERVER);
     }
 
-    private List<Call.CallDetail> load(SearchSourceBuilder sourceBuilder, String indexName,
-        DetectPoint detectPoint) throws IOException {
-        sourceBuilder.aggregation(AggregationBuilders.terms(Metrics.ENTITY_ID).field(Metrics.ENTITY_ID).size(1000));
+    @Override
+    public List<Call.CallDetail> loadProcessRelationDetectedAtClientSide(String serviceInstanceId, long startTB, long endTB) throws IOException {
+        return buildProcessRelation(serviceInstanceId, startTB, endTB, DetectPoint.CLIENT);
+    }
 
-        SearchResponse response = getClient().search(indexName, sourceBuilder);
+    @Override
+    public List<Call.CallDetail> loadProcessRelationDetectedAtServerSide(String serviceInstanceId, long startTB, long endTB) throws IOException {
+        return buildProcessRelation(serviceInstanceId, startTB, endTB, DetectPoint.SERVER);
+    }
 
-        List<Call.CallDetail> calls = new ArrayList<>();
-        Terms entityTerms = response.getAggregations().get(Metrics.ENTITY_ID);
-        for (Terms.Bucket entityBucket : entityTerms.getBuckets()) {
-            String entityId = entityBucket.getKeyAsString();
+    private List<Call.CallDetail> buildProcessRelation(String serviceInstanceId, long startTB, long endTB, DetectPoint detectPoint) throws IOException {
+        final SearchBuilder sourceBuilder = Search.builder().size(0);
+        sourceBuilder.query(Query.bool()
+            .must(Query.term(ProcessRelationServerSideMetrics.SERVICE_INSTANCE_ID, serviceInstanceId))
+            .must(Query.range(EndpointRelationServerSideMetrics.TIME_BUCKET)
+                .gte(startTB)
+                .lte(endTB)));
+        sourceBuilder.aggregation(
+            Aggregation
+                .terms(Metrics.ENTITY_ID).field(Metrics.ENTITY_ID)
+                .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST)
+                .size(1000));
 
-            RelationDefineUtil.RelationDefine relationDefine = RelationDefineUtil.splitEntityId(entityId);
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(detectPoint == DetectPoint.SERVER ?
+                ProcessRelationServerSideMetrics.INDEX_NAME : ProcessRelationClientSideMetrics.INDEX_NAME);
+        final SearchResponse response = getClient().search(index, sourceBuilder.build());
+
+        final List<Call.CallDetail> calls = new ArrayList<>();
+        final Map<String, Object> entityTerms =
+            (Map<String, Object>) response.getAggregations().get(Metrics.ENTITY_ID);
+        final List<Map<String, Object>> buckets =
+            (List<Map<String, Object>>) entityTerms.get("buckets");
+        for (final Map<String, Object> entityBucket : buckets) {
+            String entityId = (String) entityBucket.get("key");
+
             Call.CallDetail call = new Call.CallDetail();
-            call.setSource(relationDefine.getSource());
-            call.setTarget(relationDefine.getDest());
-            call.setComponentId(relationDefine.getComponentId());
-            call.setDetectPoint(detectPoint);
-            call.generateID();
+            call.buildProcessRelation(entityId, detectPoint);
             calls.add(call);
         }
         return calls;
+    }
+
+    private List<Call.CallDetail> buildServiceRelation(SearchBuilder sourceBuilder,
+                                                       String indexName,
+                                                       DetectPoint detectPoint) {
+        sourceBuilder.aggregation(
+            Aggregation
+                .terms(Metrics.ENTITY_ID).field(Metrics.ENTITY_ID)
+                .subAggregation(
+                    Aggregation.terms(ServiceRelationServerSideMetrics.COMPONENT_ID)
+                               .field(ServiceRelationServerSideMetrics.COMPONENT_ID)
+                               .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                               .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST))
+                .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST)
+                .size(1000));
+
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(indexName);
+        final SearchResponse response = getClient().search(index, sourceBuilder.build());
+
+        final List<Call.CallDetail> calls = new ArrayList<>();
+        final Map<String, Object> entityTerms =
+            (Map<String, Object>) response.getAggregations().get(Metrics.ENTITY_ID);
+        final List<Map<String, Object>> buckets =
+            (List<Map<String, Object>>) entityTerms.get("buckets");
+        for (final Map<String, Object> entityBucket : buckets) {
+            String entityId = (String) entityBucket.get("key");
+            final Map<String, Object> componentTerms =
+                (Map<String, Object>) entityBucket.get(
+                    ServiceRelationServerSideMetrics.COMPONENT_ID);
+            final List<Map<String, Object>> subAgg =
+                (List<Map<String, Object>>) componentTerms.get("buckets");
+            final int componentId = ((Number) subAgg.iterator().next().get("key")).intValue();
+
+            Call.CallDetail call = new Call.CallDetail();
+            call.buildFromServiceRelation(entityId, componentId, detectPoint);
+            calls.add(call);
+        }
+        return calls;
+    }
+
+    private List<Call.CallDetail> buildInstanceRelation(SearchBuilder sourceBuilder,
+                                                        String indexName,
+                                                        DetectPoint detectPoint) {
+        sourceBuilder.aggregation(
+            Aggregation
+                .terms(Metrics.ENTITY_ID).field(Metrics.ENTITY_ID)
+                .subAggregation(
+                    Aggregation.terms(ServiceInstanceRelationServerSideMetrics.COMPONENT_ID)
+                               .field(ServiceInstanceRelationServerSideMetrics.COMPONENT_ID)
+                               .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                               .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST))
+                .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST)
+                .size(1000));
+
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(indexName);
+        SearchResponse response = getClient().search(index, sourceBuilder.build());
+
+        List<Call.CallDetail> calls = new ArrayList<>();
+        final Map<String, Object> entityTerms =
+            (Map<String, Object>) response.getAggregations().get(Metrics.ENTITY_ID);
+        final List<Map<String, Object>> buckets =
+            (List<Map<String, Object>>) entityTerms.get("buckets");
+        for (Map<String, Object> entityBucket : buckets) {
+            final String entityId = (String) entityBucket.get("key");
+            final Map<String, Object> componentTerms = (Map<String, Object>) entityBucket.get(
+                ServiceInstanceRelationServerSideMetrics.COMPONENT_ID);
+            final List<Map<String, Object>> subAgg =
+                (List<Map<String, Object>>) componentTerms.get("buckets");
+            final int componentId = ((Number) subAgg.iterator().next().get("key")).intValue();
+
+            Call.CallDetail call = new Call.CallDetail();
+            call.buildFromInstanceRelation(entityId, componentId, detectPoint);
+            calls.add(call);
+        }
+        return calls;
+    }
+
+    private List<Call.CallDetail> loadEndpoint(SearchBuilder sourceBuilder, String indexName,
+                                               DetectPoint detectPoint) {
+        sourceBuilder.aggregation(
+            Aggregation.terms(Metrics.ENTITY_ID).field(Metrics.ENTITY_ID)
+                       .executionHint(TermsAggregationBuilder.ExecutionHint.MAP)
+                       .collectMode(TermsAggregationBuilder.CollectMode.BREADTH_FIRST)
+                       .size(1000));
+
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(indexName);
+        final SearchResponse response = getClient().search(index, sourceBuilder.build());
+
+        final List<Call.CallDetail> calls = new ArrayList<>();
+        final Map<String, Object> entityTerms =
+            (Map<String, Object>) response.getAggregations().get(Metrics.ENTITY_ID);
+        final List<Map<String, Object>> buckets =
+            (List<Map<String, Object>>) entityTerms.get("buckets");
+        for (final Map<String, Object> entityBucket : buckets) {
+            String entityId = (String) entityBucket.get("key");
+
+            Call.CallDetail call = new Call.CallDetail();
+            call.buildFromEndpointRelation(entityId, detectPoint);
+            calls.add(call);
+        }
+        return calls;
+    }
+
+    private void setQueryCondition(SearchBuilder search, long startTB, long endTB,
+                                   List<String> serviceIds) {
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.range(ServiceRelationServerSideMetrics.TIME_BUCKET)
+                            .gte(startTB)
+                            .lte(endTB));
+
+        final BoolQueryBuilder serviceIdBoolQuery = Query.bool();
+
+        query.must(serviceIdBoolQuery);
+
+        if (serviceIds.size() == 1) {
+            serviceIdBoolQuery.should(
+                Query.term(
+                    ServiceRelationServerSideMetrics.SOURCE_SERVICE_ID,
+                    serviceIds.get(0)
+                ));
+            serviceIdBoolQuery.should(
+                Query.term(
+                    ServiceRelationServerSideMetrics.DEST_SERVICE_ID,
+                    serviceIds.get(0)
+                ));
+        } else {
+            serviceIdBoolQuery.should(
+                Query.terms(
+                    ServiceRelationServerSideMetrics.SOURCE_SERVICE_ID,
+                    serviceIds
+                ));
+            serviceIdBoolQuery.should(
+                Query.terms(
+                    ServiceRelationServerSideMetrics.DEST_SERVICE_ID,
+                    serviceIds
+                ));
+        }
+        search.query(query);
     }
 }

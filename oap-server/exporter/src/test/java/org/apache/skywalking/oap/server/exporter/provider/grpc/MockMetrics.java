@@ -21,19 +21,16 @@ package org.apache.skywalking.oap.server.exporter.provider.grpc;
 import org.apache.skywalking.oap.server.core.analysis.metrics.Metrics;
 import org.apache.skywalking.oap.server.core.remote.grpc.proto.RemoteData;
 
-/**
- * Created by dengming, 2019.04.20
- */
 public class MockMetrics extends Metrics {
 
     @Override
-    public String id() {
+    protected String id0() {
         return "mock-metrics";
     }
 
     @Override
-    public void combine(Metrics metrics) {
-
+    public boolean combine(Metrics metrics) {
+        return true;
     }
 
     @Override
@@ -48,11 +45,6 @@ public class MockMetrics extends Metrics {
 
     @Override
     public Metrics toDay() {
-        return this;
-    }
-
-    @Override
-    public Metrics toMonth() {
         return this;
     }
 

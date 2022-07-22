@@ -20,293 +20,355 @@ package org.apache.skywalking.oap.server.storage.plugin.elasticsearch.query;
 
 import com.google.common.base.Strings;
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import org.apache.skywalking.oap.server.core.query.entity.Attribute;
-import org.apache.skywalking.oap.server.core.query.entity.Database;
-import org.apache.skywalking.oap.server.core.query.entity.Endpoint;
-import org.apache.skywalking.oap.server.core.query.entity.Language;
-import org.apache.skywalking.oap.server.core.query.entity.LanguageTrans;
-import org.apache.skywalking.oap.server.core.query.entity.Service;
-import org.apache.skywalking.oap.server.core.query.entity.ServiceInstance;
-import org.apache.skywalking.oap.server.core.register.EndpointInventory;
-import org.apache.skywalking.oap.server.core.register.NodeType;
-import org.apache.skywalking.oap.server.core.register.RegisterSource;
-import org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory;
-import org.apache.skywalking.oap.server.core.register.ServiceInventory;
-import org.apache.skywalking.oap.server.core.source.DetectPoint;
+import java.util.Set;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.skywalking.library.elasticsearch.requests.search.BoolQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Query;
+import org.apache.skywalking.library.elasticsearch.requests.search.RangeQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Search;
+import org.apache.skywalking.library.elasticsearch.requests.search.SearchBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.SearchParams;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchHit;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchResponse;
+import org.apache.skywalking.oap.server.core.analysis.IDManager;
+import org.apache.skywalking.oap.server.core.analysis.Layer;
+import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
+import org.apache.skywalking.oap.server.core.analysis.manual.endpoint.EndpointTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.instance.InstanceTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.process.ProcessDetectType;
+import org.apache.skywalking.oap.server.core.analysis.manual.process.ProcessTraffic;
+import org.apache.skywalking.oap.server.core.analysis.manual.service.ServiceTraffic;
+import org.apache.skywalking.oap.server.core.query.enumeration.Language;
+import org.apache.skywalking.oap.server.core.query.enumeration.ProfilingSupportStatus;
+import org.apache.skywalking.oap.server.core.query.type.Attribute;
+import org.apache.skywalking.oap.server.core.query.type.Endpoint;
+import org.apache.skywalking.oap.server.core.query.type.Process;
+import org.apache.skywalking.oap.server.core.query.type.Service;
+import org.apache.skywalking.oap.server.core.query.type.ServiceInstance;
 import org.apache.skywalking.oap.server.core.storage.query.IMetadataQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.type.HashMapConverter;
 import org.apache.skywalking.oap.server.library.client.elasticsearch.ElasticSearchClient;
-import org.apache.skywalking.oap.server.library.util.BooleanUtils;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.StorageModuleElasticsearchConfig;
 import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.EsDAO;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.IndexController;
 import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.MatchCNameBuilder;
-import org.elasticsearch.action.get.GetResponse;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.index.query.BoolQueryBuilder;
-import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
+import static org.apache.skywalking.oap.server.core.analysis.manual.instance.InstanceTraffic.PropertyUtil.LANGUAGE;
 
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.HOST_NAME;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.IPV4S;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.LANGUAGE;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.OS_NAME;
-import static org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory.PropertyUtil.PROCESS_NO;
-
-/**
- * @author peng-yongsheng
- */
 public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
     private static final Gson GSON = new Gson();
 
     private final int queryMaxSize;
+    private final int scrollingBatchSize;
 
-    public MetadataQueryEsDAO(ElasticSearchClient client, int queryMaxSize) {
+    public MetadataQueryEsDAO(
+        ElasticSearchClient client,
+        StorageModuleElasticsearchConfig config) {
         super(client);
-        this.queryMaxSize = queryMaxSize;
-    }
-
-    @Override public int numOfService(long startTimestamp, long endTimestamp) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(timeRangeQueryBuild(startTimestamp, endTimestamp));
-
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(ServiceInventory.IS_ADDRESS, BooleanUtils.FALSE));
-
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(0);
-
-        SearchResponse response = getClient().search(ServiceInventory.INDEX_NAME, sourceBuilder);
-        return (int)response.getHits().getTotalHits();
-    }
-
-    @Override public int numOfEndpoint(long startTimestamp, long endTimestamp) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(EndpointInventory.DETECT_POINT, DetectPoint.SERVER.ordinal()));
-
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(0);
-
-        SearchResponse response = getClient().search(EndpointInventory.INDEX_NAME, sourceBuilder);
-        return (int)response.getHits().getTotalHits();
+        this.queryMaxSize = config.getMetadataQueryMaxSize();
+        this.scrollingBatchSize = config.getScrollingBatchSize();
     }
 
     @Override
-    public int numOfConjectural(long startTimestamp, long endTimestamp, int nodeTypeValue) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
+    public List<Service> listServices(final String layer, final String group) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ServiceTraffic.INDEX_NAME);
 
-        sourceBuilder.query(QueryBuilders.termQuery(ServiceInventory.NODE_TYPE, nodeTypeValue));
-        sourceBuilder.size(0);
+        final int batchSize = Math.min(queryMaxSize, scrollingBatchSize);
+        final BoolQueryBuilder query =
+            Query.bool();
+        final SearchBuilder search = Search.builder().query(query).size(batchSize);
+        if (StringUtil.isNotEmpty(layer)) {
+            query.must(Query.term(ServiceTraffic.LAYER, Layer.valueOf(layer).value()));
+        }
+        if (StringUtil.isNotEmpty(group)) {
+            query.must(Query.term(ServiceTraffic.GROUP, group));
+        }
+        final SearchParams params = new SearchParams().scroll(SCROLL_CONTEXT_RETENTION);
+        final List<Service> services = new ArrayList<>();
 
-        SearchResponse response = getClient().search(ServiceInventory.INDEX_NAME, sourceBuilder);
-
-        return (int)response.getHits().getTotalHits();
-    }
-
-    @Override
-    public List<Service> getAllServices(long startTimestamp, long endTimestamp) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(timeRangeQueryBuild(startTimestamp, endTimestamp));
-
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(ServiceInventory.IS_ADDRESS, BooleanUtils.FALSE));
-
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(queryMaxSize);
-
-        SearchResponse response = getClient().search(ServiceInventory.INDEX_NAME, sourceBuilder);
-
-        return buildServices(response);
-    }
-
-    @Override
-    public List<Database> getAllDatabases() throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(ServiceInventory.NODE_TYPE, NodeType.Database.value()));
-
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(queryMaxSize);
-
-        SearchResponse response = getClient().search(ServiceInventory.INDEX_NAME, sourceBuilder);
-
-        List<Database> databases = new ArrayList<>();
-        for (SearchHit searchHit : response.getHits()) {
-            Map<String, Object> sourceAsMap = searchHit.getSourceAsMap();
-            Database database = new Database();
-            database.setId(((Number)sourceAsMap.get(ServiceInventory.SEQUENCE)).intValue());
-            database.setName((String)sourceAsMap.get(ServiceInventory.NAME));
-            String propertiesString = (String)sourceAsMap.get(ServiceInstanceInventory.PROPERTIES);
-            if (!Strings.isNullOrEmpty(propertiesString)) {
-                JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
-                if (properties.has(ServiceInventory.PropertyUtil.DATABASE)) {
-                    database.setType(properties.get(ServiceInventory.PropertyUtil.DATABASE).getAsString());
-                } else {
-                    database.setType("UNKNOWN");
+        SearchResponse results = getClient().search(index, search.build(), params);
+        Set<String> scrollIds = new HashSet<>();
+        try {
+            while (true) {
+                String scrollId = results.getScrollId();
+                scrollIds.add(scrollId);
+                if (results.getHits().getTotal() == 0) {
+                    break;
                 }
+                final List<Service> batch = buildServices(results);
+                services.addAll(batch);
+                // The last iterate, there is no more data
+                if (batch.size() < batchSize) {
+                    break;
+                }
+                // We've got enough data
+                if (services.size() >= queryMaxSize) {
+                    break;
+                }
+                results = getClient().scroll(SCROLL_CONTEXT_RETENTION, scrollId);
             }
-            databases.add(database);
+        } finally {
+            scrollIds.forEach(getClient()::deleteScrollContextQuietly);
         }
-        return databases;
+        return services;
     }
 
-    @Override public List<Service> searchServices(long startTimestamp, long endTimestamp,
-        String keyword) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
+    @Override
+    public List<Service> getServices(final String serviceId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ServiceTraffic.INDEX_NAME);
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.term(ServiceTraffic.SERVICE_ID, serviceId));
+        final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
 
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(timeRangeQueryBuild(startTimestamp, endTimestamp));
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(ServiceInventory.IS_ADDRESS, BooleanUtils.FALSE));
-
-        if (!Strings.isNullOrEmpty(keyword)) {
-            String matchCName = MatchCNameBuilder.INSTANCE.build(ServiceInventory.NAME);
-            boolQueryBuilder.must().add(QueryBuilders.matchQuery(matchCName, keyword));
-        }
-
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(queryMaxSize);
-
-        SearchResponse response = getClient().search(ServiceInventory.INDEX_NAME, sourceBuilder);
+        final SearchResponse response = getClient().search(index, search.build());
         return buildServices(response);
     }
 
     @Override
-    public Service searchService(String serviceCode) throws IOException {
-        GetResponse response = getClient().get(ServiceInventory.INDEX_NAME, ServiceInventory.buildId(serviceCode));
-        if (response.isExists()) {
-            Service service = new Service();
-            service.setId(((Number)response.getSource().get(ServiceInventory.SEQUENCE)).intValue());
-            service.setName((String)response.getSource().get(ServiceInventory.NAME));
-            return service;
-        } else {
-            return null;
+    public List<ServiceInstance> listInstances(long startTimestamp, long endTimestamp,
+                                               String serviceId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(InstanceTraffic.INDEX_NAME);
+
+        final long minuteTimeBucket = TimeBucket.getMinuteTimeBucket(startTimestamp);
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.range(InstanceTraffic.LAST_PING_TIME_BUCKET).gte(minuteTimeBucket))
+                 .must(Query.term(InstanceTraffic.SERVICE_ID, serviceId));
+        final int batchSize = Math.min(queryMaxSize, scrollingBatchSize);
+        final SearchBuilder search = Search.builder().query(query).size(batchSize);
+
+        final List<ServiceInstance> instances = new ArrayList<>();
+        SearchResponse response = getClient().search(index, search.build());
+        while (response.getHits().getTotal() > 0) {
+            final List<ServiceInstance> batch = buildInstances(response);
+            instances.addAll(batch);
+            if (batch.size() < batchSize) {
+                break;
+            }
+            if (batch.size() >= queryMaxSize) {
+                break;
+            }
+            response = getClient().scroll(SCROLL_CONTEXT_RETENTION, response.getScrollId());
         }
+        return instances;
     }
 
-    @Override public List<Endpoint> searchEndpoint(String keyword, String serviceId,
-        int limit) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
+    @Override
+    public ServiceInstance getInstance(final String instanceId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(InstanceTraffic.INDEX_NAME);
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.term("_id", instanceId));
+        final SearchBuilder search = Search.builder().query(query).size(1);
 
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(EndpointInventory.SERVICE_ID, serviceId));
+        final SearchResponse response = getClient().search(index, search.build());
+        final List<ServiceInstance> instances = buildInstances(response);
+        return instances.size() > 0 ? instances.get(0) : null;
+    }
+
+    @Override
+    public List<Endpoint> findEndpoint(String keyword, String serviceId, int limit)
+        throws IOException {
+        final String index = IndexController.LogicIndicesRegister.getPhysicalTableName(
+            EndpointTraffic.INDEX_NAME);
+
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.term(EndpointTraffic.SERVICE_ID, serviceId));
 
         if (!Strings.isNullOrEmpty(keyword)) {
-            String matchCName = MatchCNameBuilder.INSTANCE.build(EndpointInventory.NAME);
-            boolQueryBuilder.must().add(QueryBuilders.matchQuery(matchCName, keyword));
+            String matchCName = MatchCNameBuilder.INSTANCE.build(EndpointTraffic.NAME);
+            query.must(Query.match(matchCName, keyword));
         }
 
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(EndpointInventory.DETECT_POINT, DetectPoint.SERVER.ordinal()));
+        final SearchBuilder search = Search.builder().query(query).size(limit);
 
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(limit);
-
-        SearchResponse response = getClient().search(EndpointInventory.INDEX_NAME, sourceBuilder);
+        final SearchResponse response = getClient().search(index, search.build());
 
         List<Endpoint> endpoints = new ArrayList<>();
         for (SearchHit searchHit : response.getHits()) {
-            Map<String, Object> sourceAsMap = searchHit.getSourceAsMap();
+            Map<String, Object> sourceAsMap = searchHit.getSource();
+
+            final EndpointTraffic endpointTraffic =
+                new EndpointTraffic.Builder().storage2Entity(new HashMapConverter.ToEntity(sourceAsMap));
 
             Endpoint endpoint = new Endpoint();
-            endpoint.setId(((Number)sourceAsMap.get(EndpointInventory.SEQUENCE)).intValue());
-            endpoint.setName((String)sourceAsMap.get(EndpointInventory.NAME));
+            endpoint.setId(endpointTraffic.id());
+            endpoint.setName((String) sourceAsMap.get(EndpointTraffic.NAME));
             endpoints.add(endpoint);
         }
 
         return endpoints;
     }
 
-    @Override public List<ServiceInstance> getServiceInstances(long startTimestamp, long endTimestamp,
-        String serviceId) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
+    @Override
+    public List<Process> listProcesses(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
+                                       final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
 
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(timeRangeQueryBuild(startTimestamp, endTimestamp));
+        final BoolQueryBuilder query = Query.bool();
+        final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
+        appendProcessWhereQuery(query, serviceId, instanceId, agentId, profilingSupportStatus,
+                lastPingStartTimeBucket, lastPingEndTimeBucket);
+        final SearchResponse results = getClient().search(index, search.build());
 
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(ServiceInstanceInventory.SERVICE_ID, serviceId));
+        return buildProcesses(results);
+    }
 
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(queryMaxSize);
+    @Override
+    public long getProcessesCount(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
+                                  final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+        final String index =
+                IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
 
-        SearchResponse response = getClient().search(ServiceInstanceInventory.INDEX_NAME, sourceBuilder);
+        final BoolQueryBuilder query = Query.bool();
+        final SearchBuilder search = Search.builder().query(query).size(0);
+        appendProcessWhereQuery(query, serviceId, instanceId, agentId, profilingSupportStatus,
+                lastPingStartTimeBucket, lastPingEndTimeBucket);
+        final SearchResponse results = getClient().search(index, search.build());
 
+        return results.getHits().getTotal();
+    }
+
+    private void appendProcessWhereQuery(BoolQueryBuilder query, String serviceId, String instanceId, String agentId,
+                                         final ProfilingSupportStatus profilingSupportStatus,
+                                         final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) {
+        if (StringUtil.isNotEmpty(serviceId)) {
+            query.must(Query.term(ProcessTraffic.SERVICE_ID, serviceId));
+        }
+        if (StringUtil.isNotEmpty(instanceId)) {
+            query.must(Query.term(ProcessTraffic.INSTANCE_ID, instanceId));
+        }
+        if (StringUtil.isNotEmpty(agentId)) {
+            query.must(Query.term(ProcessTraffic.AGENT_ID, agentId));
+        }
+        if (profilingSupportStatus != null) {
+            query.must(Query.term(ProcessTraffic.PROFILING_SUPPORT_STATUS, profilingSupportStatus.value()));
+        }
+        final RangeQueryBuilder rangeQuery = Query.range(ProcessTraffic.LAST_PING_TIME_BUCKET);
+        if (lastPingStartTimeBucket > 0) {
+            rangeQuery.gte(lastPingStartTimeBucket);
+        }
+        if (lastPingEndTimeBucket > 0) {
+            rangeQuery.lte(lastPingEndTimeBucket);
+        }
+        if (lastPingStartTimeBucket > 0 || lastPingEndTimeBucket > 0) {
+            query.must(rangeQuery);
+        }
+        query.mustNot(Query.term(ProcessTraffic.DETECT_TYPE, ProcessDetectType.VIRTUAL.value()));
+    }
+
+    @Override
+    public Process getProcess(String processId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
+        final BoolQueryBuilder query = Query.bool()
+                                            .must(Query.term("_id", processId));
+        final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
+
+        final SearchResponse response = getClient().search(index, search.build());
+        final List<Process> processes = buildProcesses(response);
+        return processes.isEmpty() ? null : processes.get(0);
+    }
+
+    private List<Service> buildServices(SearchResponse response) {
+        List<Service> services = new ArrayList<>();
+        for (SearchHit hit : response.getHits()) {
+            final Map<String, Object> sourceAsMap = hit.getSource();
+            final ServiceTraffic.Builder builder = new ServiceTraffic.Builder();
+            final ServiceTraffic serviceTraffic = builder.storage2Entity(new HashMapConverter.ToEntity(sourceAsMap));
+            String serviceName = serviceTraffic.getName();
+            Service service = new Service();
+            service.setId(serviceTraffic.getServiceId());
+            service.setName(serviceName);
+            service.setShortName(serviceTraffic.getShortName());
+            service.setGroup(serviceTraffic.getGroup());
+            service.getLayers().add(serviceTraffic.getLayer().name());
+            services.add(service);
+        }
+        return services;
+    }
+
+    private List<ServiceInstance> buildInstances(SearchResponse response) {
         List<ServiceInstance> serviceInstances = new ArrayList<>();
         for (SearchHit searchHit : response.getHits()) {
-            Map<String, Object> sourceAsMap = searchHit.getSourceAsMap();
+            Map<String, Object> sourceAsMap = searchHit.getSource();
+
+            final InstanceTraffic instanceTraffic =
+                new InstanceTraffic.Builder().storage2Entity(new HashMapConverter.ToEntity(sourceAsMap));
 
             ServiceInstance serviceInstance = new ServiceInstance();
-            serviceInstance.setId(String.valueOf(sourceAsMap.get(ServiceInstanceInventory.SEQUENCE)));
-            serviceInstance.setName((String)sourceAsMap.get(ServiceInstanceInventory.NAME));
+            serviceInstance.setId(instanceTraffic.id());
+            serviceInstance.setName(instanceTraffic.getName());
+            serviceInstance.setInstanceUUID(serviceInstance.getId());
 
-            String propertiesString = (String)sourceAsMap.get(ServiceInstanceInventory.PROPERTIES);
-            if (!Strings.isNullOrEmpty(propertiesString)) {
-                JsonObject properties = GSON.fromJson(propertiesString, JsonObject.class);
-                if (properties.has(LANGUAGE)) {
-                    serviceInstance.setLanguage(LanguageTrans.INSTANCE.value(properties.get(LANGUAGE).getAsString()));
-                } else {
-                    serviceInstance.setLanguage(Language.UNKNOWN);
-                }
-
-                if (properties.has(OS_NAME)) {
-                    serviceInstance.getAttributes().add(new Attribute(OS_NAME, properties.get(OS_NAME).getAsString()));
-                }
-                if (properties.has(HOST_NAME)) {
-                    serviceInstance.getAttributes().add(new Attribute(HOST_NAME, properties.get(HOST_NAME).getAsString()));
-                }
-                if (properties.has(PROCESS_NO)) {
-                    serviceInstance.getAttributes().add(new Attribute(PROCESS_NO, properties.get(PROCESS_NO).getAsString()));
-                }
-                if (properties.has(IPV4S)) {
-                    List<String> ipv4s = ServiceInstanceInventory.PropertyUtil.ipv4sDeserialize(properties.get(IPV4S).getAsString());
-                    for (String ipv4 : ipv4s) {
-                        serviceInstance.getAttributes().add(new Attribute(ServiceInstanceInventory.PropertyUtil.IPV4S, ipv4));
+            JsonObject properties = instanceTraffic.getProperties();
+            if (properties != null) {
+                for (Map.Entry<String, JsonElement> property : properties.entrySet()) {
+                    String key = property.getKey();
+                    String value = property.getValue().getAsString();
+                    if (key.equals(LANGUAGE)) {
+                        serviceInstance.setLanguage(Language.value(value));
+                    } else {
+                        serviceInstance.getAttributes().add(new Attribute(key, value));
                     }
                 }
             } else {
                 serviceInstance.setLanguage(Language.UNKNOWN);
             }
-
             serviceInstances.add(serviceInstance);
         }
-
         return serviceInstances;
     }
 
-    private List<Service> buildServices(SearchResponse response) {
-        List<Service> services = new ArrayList<>();
+    private List<Process> buildProcesses(SearchResponse response) {
+        List<Process> processes = new ArrayList<>();
         for (SearchHit searchHit : response.getHits()) {
-            Map<String, Object> sourceAsMap = searchHit.getSourceAsMap();
+            Map<String, Object> sourceAsMap = searchHit.getSource();
 
-            Service service = new Service();
-            service.setId(((Number)sourceAsMap.get(ServiceInventory.SEQUENCE)).intValue());
-            service.setName((String)sourceAsMap.get(ServiceInventory.NAME));
-            services.add(service);
+            final ProcessTraffic processTraffic =
+                new ProcessTraffic.Builder().storage2Entity(new HashMapConverter.ToEntity(sourceAsMap));
+
+            Process process = new Process();
+            process.setId(processTraffic.id());
+            process.setName(processTraffic.getName());
+            final String serviceId = processTraffic.getServiceId();
+            process.setServiceId(serviceId);
+            process.setServiceName(IDManager.ServiceID.analysisId(serviceId).getName());
+            final String instanceId = processTraffic.getInstanceId();
+            process.setInstanceId(instanceId);
+            process.setInstanceName(IDManager.ServiceInstanceID.analysisId(instanceId).getName());
+            process.setAgentId(processTraffic.getAgentId());
+            process.setDetectType(ProcessDetectType.valueOf(processTraffic.getDetectType()).name());
+
+            JsonObject properties = processTraffic.getProperties();
+            if (properties != null) {
+                for (Map.Entry<String, JsonElement> property : properties.entrySet()) {
+                    String key = property.getKey();
+                    String value = property.getValue().getAsString();
+                    process.getAttributes().add(new Attribute(key, value));
+                }
+            }
+            final String labelsJson = processTraffic.getLabelsJson();
+            if (StringUtils.isNotEmpty(labelsJson)) {
+                final List<String> labels = GSON.<List<String>>fromJson(labelsJson, ArrayList.class);
+                process.getLabels().addAll(labels);
+            }
+            processes.add(process);
         }
-
-        return services;
-    }
-
-    private BoolQueryBuilder timeRangeQueryBuild(long startTimestamp, long endTimestamp) {
-        BoolQueryBuilder boolQuery1 = QueryBuilders.boolQuery();
-        boolQuery1.must().add(QueryBuilders.rangeQuery(RegisterSource.HEARTBEAT_TIME).gte(endTimestamp));
-        boolQuery1.must().add(QueryBuilders.rangeQuery(RegisterSource.REGISTER_TIME).lte(endTimestamp));
-
-        BoolQueryBuilder boolQuery2 = QueryBuilders.boolQuery();
-        boolQuery2.must().add(QueryBuilders.rangeQuery(RegisterSource.REGISTER_TIME).lte(endTimestamp));
-        boolQuery2.must().add(QueryBuilders.rangeQuery(RegisterSource.HEARTBEAT_TIME).gte(startTimestamp));
-
-        BoolQueryBuilder timeBoolQuery = QueryBuilders.boolQuery();
-        timeBoolQuery.should().add(boolQuery1);
-        timeBoolQuery.should().add(boolQuery2);
-
-        return timeBoolQuery;
+        return processes;
     }
 }

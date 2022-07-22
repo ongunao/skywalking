@@ -18,82 +18,96 @@
 
 package org.apache.skywalking.oap.server.receiver.zipkin;
 
+import com.linecorp.armeria.common.HttpMethod;
+import java.util.Arrays;
 import org.apache.skywalking.oap.server.core.CoreModule;
 import org.apache.skywalking.oap.server.library.module.ModuleConfig;
 import org.apache.skywalking.oap.server.library.module.ModuleDefine;
 import org.apache.skywalking.oap.server.library.module.ModuleProvider;
 import org.apache.skywalking.oap.server.library.module.ModuleStartException;
 import org.apache.skywalking.oap.server.library.module.ServiceNotProvidedException;
-import org.apache.skywalking.oap.server.library.server.ServerException;
-import org.apache.skywalking.oap.server.library.server.jetty.JettyServer;
-import org.apache.skywalking.oap.server.receiver.sharing.server.CoreRegisterLinker;
-import org.apache.skywalking.oap.server.receiver.trace.module.TraceModule;
-import org.apache.skywalking.oap.server.receiver.trace.provider.parser.ISegmentParserService;
-import org.apache.skywalking.oap.server.receiver.zipkin.analysis.*;
-import org.apache.skywalking.oap.server.receiver.zipkin.handler.SpanV1JettyHandler;
-import org.apache.skywalking.oap.server.receiver.zipkin.handler.SpanV2JettyHandler;
-import org.apache.skywalking.oap.server.receiver.zipkin.analysis.transform.Zipkin2SkyWalkingTransfer;
+import org.apache.skywalking.oap.server.library.server.http.HTTPServer;
+import org.apache.skywalking.oap.server.library.server.http.HTTPServerConfig;
+import org.apache.skywalking.oap.server.receiver.zipkin.handler.ZipkinSpanHTTPHandler;
+import org.apache.skywalking.oap.server.receiver.zipkin.kafka.KafkaHandler;
+import org.apache.skywalking.oap.server.telemetry.TelemetryModule;
 
-/**
- * @author wusheng
- */
 public class ZipkinReceiverProvider extends ModuleProvider {
     public static final String NAME = "default";
-    private ZipkinReceiverConfig config;
-    private JettyServer jettyServer;
+    private final ZipkinReceiverConfig config;
+    private HTTPServer httpServer;
+    private KafkaHandler kafkaHandler;
 
     public ZipkinReceiverProvider() {
         config = new ZipkinReceiverConfig();
     }
 
-    @Override public String name() {
+    @Override
+    public String name() {
         return NAME;
     }
 
-    @Override public Class<? extends ModuleDefine> module() {
+    @Override
+    public Class<? extends ModuleDefine> module() {
         return ZipkinReceiverModule.class;
     }
 
-    @Override public ModuleConfig createConfigBeanIfAbsent() {
+    @Override
+    public ModuleConfig createConfigBeanIfAbsent() {
         return config;
     }
 
-    @Override public void prepare() throws ServiceNotProvidedException {
-
+    @Override
+    public void prepare() throws ServiceNotProvidedException {
     }
 
-    @Override public void start() throws ServiceNotProvidedException, ModuleStartException {
-        CoreRegisterLinker.setModuleManager(getManager());
+    @Override
+    public void start() throws ServiceNotProvidedException, ModuleStartException {
+        if (config.getSampleRate() < 0 || config.getSampleRate() > 10000) {
+            throw new IllegalArgumentException(
+                "sampleRate: " + config.getSampleRate() + ", should be between 0 and 10000");
+        }
 
-        jettyServer = new JettyServer(config.getHost(), config.getPort(), config.getContextPath());
-        jettyServer.initialize();
+        if (config.isEnableHttpCollector()) {
+            HTTPServerConfig httpServerConfig = HTTPServerConfig.builder()
+                                                                .host(config.getRestHost())
+                                                                .port(config.getRestPort())
+                                                                .contextPath(config.getRestContextPath())
+                                                                .idleTimeOut(config.getRestIdleTimeOut())
+                                                                .maxThreads(config.getRestMaxThreads())
+                                                                .acceptQueueSize(config.getRestAcceptQueueSize())
+                                                                .build();
 
-        jettyServer.addHandler(new SpanV1JettyHandler(config, getManager()));
-        jettyServer.addHandler(new SpanV2JettyHandler(config, getManager()));
+            httpServer = new HTTPServer(httpServerConfig);
+            httpServer.initialize();
 
-        if (config.isNeedAnalysis()) {
-            ISegmentParserService segmentParseService = getManager().find(TraceModule.NAME).provider().getService(ISegmentParserService.class);
-            Receiver2AnalysisBridge bridge = new Receiver2AnalysisBridge(segmentParseService);
-            Zipkin2SkyWalkingTransfer.INSTANCE.addListener(bridge);
+            httpServer.addHandler(
+                new ZipkinSpanHTTPHandler(config, getManager()),
+                Arrays.asList(HttpMethod.POST, HttpMethod.GET)
+            );
+        }
+
+        if (config.isEnableKafkaCollector()) {
+            kafkaHandler = new KafkaHandler(config, getManager());
         }
     }
 
-    @Override public void notifyAfterCompleted() throws ModuleStartException {
-        try {
-            jettyServer.start();
-        } catch (ServerException e) {
-            throw new ModuleStartException(e.getMessage(), e);
+    @Override
+    public void notifyAfterCompleted() throws ModuleStartException {
+        if (config.isEnableHttpCollector()) {
+            httpServer.start();
+        }
+
+        if (config.isEnableKafkaCollector()) {
+            kafkaHandler.start();
         }
     }
 
-    @Override public String[] requiredModules() {
-        if (config.isNeedAnalysis()) {
-            return new String[] {TraceModule.NAME};
-        } else {
-            /**
-             * In pure trace status, we don't need the trace receiver.
-             */
-            return new String[] {CoreModule.NAME};
-        }
+    @Override
+    public String[] requiredModules() {
+        return new String[] {
+            TelemetryModule.NAME,
+            CoreModule.NAME
+        };
     }
 }

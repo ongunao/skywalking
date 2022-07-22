@@ -19,45 +19,72 @@
 package org.apache.skywalking.oap.server.storage.plugin.elasticsearch.query;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
+import org.apache.skywalking.library.elasticsearch.requests.search.BoolQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Query;
+import org.apache.skywalking.library.elasticsearch.requests.search.Search;
+import org.apache.skywalking.library.elasticsearch.requests.search.SearchBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Sort;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchHit;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchResponse;
+import org.apache.skywalking.oap.server.core.analysis.IDManager;
 import org.apache.skywalking.oap.server.core.analysis.topn.TopN;
-import org.apache.skywalking.oap.server.core.query.entity.*;
+import org.apache.skywalking.oap.server.core.query.enumeration.Order;
+import org.apache.skywalking.oap.server.core.query.input.Duration;
+import org.apache.skywalking.oap.server.core.query.input.TopNCondition;
+import org.apache.skywalking.oap.server.core.query.type.SelectedRecord;
 import org.apache.skywalking.oap.server.core.storage.query.ITopNRecordsQueryDAO;
 import org.apache.skywalking.oap.server.library.client.elasticsearch.ElasticSearchClient;
 import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.EsDAO;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.index.query.*;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.sort.SortOrder;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.IndexController;
 
-/**
- * @author wusheng
- */
 public class TopNRecordsQueryEsDAO extends EsDAO implements ITopNRecordsQueryDAO {
     public TopNRecordsQueryEsDAO(ElasticSearchClient client) {
         super(client);
     }
 
     @Override
-    public List<TopNRecord> getTopNRecords(long startSecondTB, long endSecondTB, String metricName, int serviceId,
-        int topN, Order order) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        boolQueryBuilder.must().add(QueryBuilders.rangeQuery(TopN.TIME_BUCKET).gte(startSecondTB).lte(endSecondTB));
-        boolQueryBuilder.must().add(QueryBuilders.termQuery(TopN.SERVICE_ID, serviceId));
+    public List<SelectedRecord> readSampledRecords(final TopNCondition condition,
+                                                   final String valueColumnName,
+                                                   final Duration duration) throws IOException {
+        final BoolQueryBuilder query =
+            Query.bool()
+                 .must(Query.range(TopN.TIME_BUCKET)
+                            .gte(duration.getStartTimeBucketInSec())
+                            .lte(duration.getEndTimeBucketInSec()));
 
-        sourceBuilder.query(boolQueryBuilder);
-        sourceBuilder.size(topN).sort(TopN.LATENCY, order.equals(Order.DES) ? SortOrder.DESC : SortOrder.ASC);
-        SearchResponse response = getClient().search(metricName, sourceBuilder);
+        if (StringUtil.isNotEmpty(condition.getParentService())) {
+            final String serviceId =
+                IDManager.ServiceID.buildId(condition.getParentService(), condition.isNormal());
+            query.must(Query.term(TopN.SERVICE_ID, serviceId));
+        }
 
-        List<TopNRecord> results = new ArrayList<>();
+        final SearchBuilder search =
+            Search.builder()
+                  .query(query)
+                  .size(condition.getTopN())
+                  .sort(
+                      valueColumnName,
+                      condition.getOrder().equals(Order.DES) ?
+                          Sort.Order.DESC : Sort.Order.ASC
+                  );
+        final SearchResponse response = getClient().search(
+            IndexController.LogicIndicesRegister.getPhysicalTableName(condition.getName()),
+            search.build()
+        );
+
+        List<SelectedRecord> results = new ArrayList<>(condition.getTopN());
 
         for (SearchHit searchHit : response.getHits().getHits()) {
-            TopNRecord record = new TopNRecord();
-            record.setStatement((String)searchHit.getSourceAsMap().get(TopN.STATEMENT));
-            record.setTraceId((String)searchHit.getSourceAsMap().get(TopN.TRACE_ID));
-            record.setLatency(((Number)searchHit.getSourceAsMap().get(TopN.LATENCY)).longValue());
+            SelectedRecord record = new SelectedRecord();
+            final Map<String, Object> sourceAsMap = searchHit.getSource();
+            record.setName((String) sourceAsMap.get(TopN.STATEMENT));
+            record.setRefId((String) sourceAsMap.get(TopN.TRACE_ID));
+            record.setId(record.getRefId());
+            record.setValue(sourceAsMap.get(valueColumnName).toString());
             results.add(record);
         }
 

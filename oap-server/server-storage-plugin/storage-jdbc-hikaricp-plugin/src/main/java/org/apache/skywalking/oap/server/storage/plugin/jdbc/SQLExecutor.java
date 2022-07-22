@@ -21,20 +21,27 @@ package org.apache.skywalking.oap.server.storage.plugin.jdbc;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import org.apache.skywalking.oap.server.library.client.request.InsertRequest;
+import org.apache.skywalking.oap.server.library.client.request.UpdateRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * A SQL executor.
- *
- * @author wusheng
  */
-public class SQLExecutor {
-    private final Logger logger = LoggerFactory.getLogger(SQLExecutor.class);
+@EqualsAndHashCode(of = "sql")
+public class SQLExecutor implements InsertRequest, UpdateRequest {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SQLExecutor.class);
 
     private String sql;
     private List<Object> param;
+    @Getter
+    private List<SQLExecutor> additionalSQLs;
 
     public SQLExecutor(String sql, List<Object> param) {
         this.sql = sql;
@@ -43,12 +50,33 @@ public class SQLExecutor {
 
     public void invoke(Connection connection) throws SQLException {
         PreparedStatement preparedStatement = connection.prepareStatement(sql);
+        setParameters(preparedStatement);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("execute sql in batch: {}, parameters: {}", sql, param);
+        }
+        preparedStatement.execute();
+        if (additionalSQLs != null) {
+            for (SQLExecutor sqlExecutor : additionalSQLs) {
+                sqlExecutor.invoke(connection);
+            }
+        }
+    }
 
+    public void setParameters(PreparedStatement preparedStatement) throws SQLException {
         for (int i = 0; i < param.size(); i++) {
             preparedStatement.setObject(i + 1, param.get(i));
         }
+    }
 
-        logger.debug("execute aql in batch: {}", sql);
-        preparedStatement.execute();
+    @Override
+    public String toString() {
+        return sql;
+    }
+
+    public void appendAdditionalSQLs(List<SQLExecutor> sqlExecutors) {
+        if (additionalSQLs == null) {
+            additionalSQLs = new ArrayList<>();
+        }
+        additionalSQLs.addAll(sqlExecutors);
     }
 }

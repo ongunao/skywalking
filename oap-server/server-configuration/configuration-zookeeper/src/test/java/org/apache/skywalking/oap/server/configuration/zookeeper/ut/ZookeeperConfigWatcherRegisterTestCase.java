@@ -27,28 +27,28 @@ import org.junit.Test;
 import org.powermock.reflect.Whitebox;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
-/**
- * @author zhaoyuguang
- */
 public class ZookeeperConfigWatcherRegisterTestCase {
     @Test
     public void TestCase() throws Exception {
-        final String nameSpace = "/default";
-        final String key = "receiver-trace.default.slowDBAccessThreshold";
+        final String namespace = "/default";
+        final String key = "agent-analyzer.default.slowDBAccessThreshold";
         final String value = "default:100,mongodb:50";
 
         final ZookeeperServerSettings mockSettings = mock(ZookeeperServerSettings.class);
-        when(mockSettings.getNameSpace()).thenReturn(nameSpace);
+        when(mockSettings.getNamespace()).thenReturn(namespace);
 
         final MockZookeeperConfigWatcherRegister mockRegister = spy(new MockZookeeperConfigWatcherRegister(mockSettings));
         final PathChildrenCache mockPathChildrenCache = mock(PathChildrenCache.class);
-        when(mockPathChildrenCache.getCurrentData(nameSpace + "/" + key)).thenReturn(new ChildData(nameSpace + "/" + key, null, value.getBytes()));
+        when(mockPathChildrenCache.getCurrentData(namespace + "/" + key)).thenReturn(new ChildData(namespace + "/" + key, null, value
+            .getBytes()));
 
         Whitebox.setInternalState(mockRegister, "childrenCache", mockPathChildrenCache);
 
-        final ConfigTable configTable = mockRegister.readConfig(Sets.newHashSet(key));
+        final ConfigTable configTable = mockRegister.readConfig(Sets.newHashSet(key)).get();
 
         assertEquals(1, configTable.getItems().size());
         assertEquals(key, configTable.getItems().get(0).getName());

@@ -1,93 +1,136 @@
 # Cluster Management
-In many product environments, backend need to support high throughputs and provide HA to keep robustness,
-so you should need cluster management always in product env.
- 
-Backend provides several ways to do cluster management. Choose the one you need/want.
+In many production environments, the backend needs to support high throughput and provide high availability (HA) to maintain robustness,
+so you always need cluster management in product env.
 
-- [Zookeeper coordinator](#zookeeper-coordinator). Use Zookeeper to let backend instance detects and communicates
+NOTICE, cluster management doesn't provide a service discovery mechanism for agents and probes. We recommend agents/probes using
+gateway to load balancer to access OAP clusters.
+
+The core feature of cluster management is supporting the whole OAP cluster running distributed aggregation and analysis for telemetry data.
+ 
+There are various ways to manage the cluster in the backend. Choose the one that best suits your needs.
+
+- [Zookeeper coordinator](#zookeeper-coordinator). Use Zookeeper to let the backend instances detect and communicate
 with each other.
-- [Kubernetes](#kubernetes). When backend cluster are deployed inside kubernetes, you could choose this
-by using k8s native APIs to manage cluster.
-- [Consul](#consul). Use Consul as backend cluster management implementor, to coordinate backend instances.
+- [Kubernetes](#kubernetes). When the backend clusters are deployed inside Kubernetes, you could make use of this method
+by using k8s native APIs to manage clusters.
+- [Consul](#consul). Use Consul as the backend cluster management implementor and coordinate backend instances.
+- [Etcd](#etcd). Use Etcd to coordinate backend instances.
 - [Nacos](#nacos). Use Nacos to coordinate backend instances.
+In the `application.yml` file, there are default configurations for the aforementioned coordinators under the section `cluster`.
+You can specify any of them in the `selector` property to enable it.
 
 ## Zookeeper coordinator
-Zookeeper is a very common and wide used cluster coordinator. Set the **cluster** module's implementor
-to **zookeeper** in the yml to active. 
+Zookeeper is a very common and widely used cluster coordinator. Set the **cluster/selector** to **zookeeper** in the yml to enable it.
 
-Required Zookeeper version, 3.4+
+Required Zookeeper version: 3.5+
 
 ```yaml
 cluster:
-  zookeeper:
-    nameSpace: ${SW_NAMESPACE:""}
-    hostPort: ${SW_CLUSTER_ZK_HOST_PORT:localhost:2181}
-    # Retry Policy
-    baseSleepTimeMs: 1000 # initial amount of time to wait between retries
-    maxRetries: 3 # max number of times to retry
+  selector: ${SW_CLUSTER:zookeeper}
+  # other configurations
 ```
 
 - `hostPort` is the list of zookeeper servers. Format is `IP1:PORT1,IP2:PORT2,...,IPn:PORTn`
+- `enableACL` enable [Zookeeper ACL](https://zookeeper.apache.org/doc/r3.5.5/zookeeperProgrammers.html#sc_ZooKeeperAccessControl) to control access to its znode.
+- `schema` is Zookeeper ACL schemas.
+- `expression` is a expression of ACL. The format of the expression is specific to the [schema](https://zookeeper.apache.org/doc/r3.5.5/zookeeperProgrammers.html#sc_BuiltinACLSchemes). 
 - `hostPort`, `baseSleepTimeMs` and `maxRetries` are settings of Zookeeper curator client.
 
-In some cases, oap default gRPC host and port in core are not suitable for internal communication among the oap nodes.
-The following setting are provided to set the hot and port manually, based on your own LAN env.
-- internalComHost, the host registered and other oap node use this to communicate with current node.
-- internalComPort, the port registered and other oap node use this to communicate with current node.
+Note: 
+- If `Zookeeper ACL` is enabled and `/skywalking` exists, you must ensure that `SkyWalking` has `CREATE`, `READ` and `WRITE` permissions. If `/skywalking` does not exist, it will be created by SkyWalking, and all permissions to the specified user will be granted. Simultaneously, znode grants READ permission to anyone.
+- If you set `schema` as `digest`, the password of the expression is set in **clear text**. 
+
+In some cases, the OAP default gRPC host and port in the core are not suitable for internal communication among the OAP nodes.
+The following settings are provided to set the host and port manually, based on your own LAN env.
+- internalComHost: The registered host and other OAP nodes use this to communicate with the current node.
+- internalComPort: the registered port and other OAP nodes use this to communicate with the current node.
 
 ```yaml
 zookeeper:
-  nameSpace: ${SW_NAMESPACE:""}
+  namespace: ${SW_NAMESPACE:""}
   hostPort: ${SW_CLUSTER_ZK_HOST_PORT:localhost:2181}
   #Retry Policy
   baseSleepTimeMs: ${SW_CLUSTER_ZK_SLEEP_TIME:1000} # initial amount of time to wait between retries
   maxRetries: ${SW_CLUSTER_ZK_MAX_RETRIES:3} # max number of times to retry
-  internalComHost: 172.10.4.10
-  internalComPort: 11800
+  internalComHost: ${SW_CLUSTER_INTERNAL_COM_HOST:172.10.4.10}
+  internalComPort: ${SW_CLUSTER_INTERNAL_COM_PORT:11800}
+  # Enable ACL
+  enableACL: ${SW_ZK_ENABLE_ACL:false} # disable ACL in default
+  schema: ${SW_ZK_SCHEMA:digest} # only support digest schema
+  expression: ${SW_ZK_EXPRESSION:skywalking:skywalking}
 ``` 
 
 
 ## Kubernetes
-Require backend cluster are deployed inside kubernetes, guides are in [Deploy in kubernetes](backend-k8s.md).
-Set implementor to `kubernetes`.
+The required backend clusters are deployed inside Kubernetes. See the guides in [Deploy in kubernetes](backend-k8s.md).
+Set the selector to `kubernetes`.
 
 ```yaml
 cluster:
-  kubernetes:
-    watchTimeoutSeconds: 60
-    namespace: default
-    labelSelector: app=collector,release=skywalking
-    uidEnvName: SKYWALKING_COLLECTOR_UID
+  selector: ${SW_CLUSTER:kubernetes}
+  # other configurations
 ```
 
 ## Consul
-Now, consul is becoming a famous system, many of companies and developers using consul to be 
-their service discovery solution. Set the **cluster** module's implementor to **consul** in 
-the yml to active. 
+Recently, the Consul system has become more and more popular, and many companies and developers now use Consul as 
+their service discovery solution. Set the **cluster/selector** to **consul** in the yml to enable it.
 
 ```yaml
 cluster:
-  consul:
-    serviceName: ${SW_SERVICE_NAME:"SkyWalking_OAP_Cluster"}
-    # Consul cluster nodes, example: 10.0.0.1:8500,10.0.0.2:8500,10.0.0.3:8500
-    hostPort: ${SW_CLUSTER_CONSUL_HOST_PORT:localhost:8500}
+  selector: ${SW_CLUSTER:consul}
+  # other configurations
 ```
 
-Same as Zookeeper coordinator,
-in some cases, oap default gRPC host and port in core are not suitable for internal communication among the oap nodes.
-The following setting are provided to set the hot and port manually, based on your own LAN env.
-- internalComHost, the host registered and other oap node use this to communicate with current node.
-- internalComPort, the port registered and other oap node use this to communicate with current node.
+Same as the Zookeeper coordinator,
+in some cases, the OAP default gRPC host and port in the core are not suitable for internal communication among the OAP nodes.
+The following settings are provided to set the host and port manually, based on your own LAN env.
+- internalComHost: The registered host and other OAP nodes use this to communicate with the current node.
+- internalComPort: The registered port and other OAP nodes use this to communicate with the current node.
 
+
+## Etcd
+Set the **cluster/selector** to **etcd** in the yml to enable it. The Etcd client has upgraded to v3 protocol and changed to the CoreOS official library. **Since 8.7.0, only the v3 protocol is supported for Etcd.** 
+
+```yaml
+cluster:
+  selector: ${SW_CLUSTER:etcd}
+  # other configurations
+  etcd:
+    # etcd cluster nodes, example: 10.0.0.1:2379,10.0.0.2:2379,10.0.0.3:2379
+    endpoints: ${SW_CLUSTER_ETCD_ENDPOINTS:localhost:2379}
+    namespace: ${SW_CLUSTER_ETCD_NAMESPACE:/skywalking}
+    serviceName: ${SW_CLUSTER_ETCD_SERVICE_NAME:"SkyWalking_OAP_Cluster"}
+    authentication: ${SW_CLUSTER_ETCD_AUTHENTICATION:false}
+    user: ${SW_CLUSTER_ETCD_USER:}
+    password: ${SW_CLUSTER_ETCD_PASSWORD:}
+```
+
+Same as the Zookeeper coordinator,
+in some cases, the OAP default gRPC host and port in the core are not suitable for internal communication among the OAP nodes.
+The following settings are provided to set the host and port manually, based on your own LAN env.
+- internalComHost: The registered host and other OAP nodes use this to communicate with the current node.
+- internalComPort: The registered port and other OAP nodes use this to communicate with the current node.
 
 ## Nacos
-Set the **cluster** module's implementor to **nacos** in 
-the yml to active. 
+Set the **cluster/selector** to **nacos** in the yml to enable it.
 
 ```yaml
 cluster:
-  nacos:
-    serviceName: ${SW_SERVICE_NAME:"SkyWalking_OAP_Cluster"}
-    # Nacos cluster nodes, example: 10.0.0.1:8848,10.0.0.2:8848,10.0.0.3:8848
-    hostPort: ${SW_CLUSTER_NACOS_HOST_PORT:localhost:8848}
+  selector: ${SW_CLUSTER:nacos}
+  # other configurations
 ```
+
+Nacos supports authentication by username or accessKey. Empty means that there is no need for authentication. Extra config is as follows:
+```yaml
+nacos:
+  username:
+  password:
+  accessKey:
+  secretKey:
+```
+
+Same as the Zookeeper coordinator,
+in some cases, the OAP default gRPC host and port in the core are not suitable for internal communication among the OAP nodes.
+The following settings are provided to set the host and port manually, based on your own LAN env.
+- internalComHost: The registered host and other OAP nodes use this to communicate with the current node.
+- internalComPort: The registered port and other OAP nodes use this to communicate with the current node.

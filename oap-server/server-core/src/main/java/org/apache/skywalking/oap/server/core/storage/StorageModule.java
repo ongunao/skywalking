@@ -18,12 +18,32 @@
 
 package org.apache.skywalking.oap.server.core.storage;
 
-import org.apache.skywalking.oap.server.core.storage.cache.*;
-import org.apache.skywalking.oap.server.core.storage.query.*;
-import org.apache.skywalking.oap.server.library.module.*;
+import org.apache.skywalking.oap.server.core.storage.cache.INetworkAddressAliasDAO;
+import org.apache.skywalking.oap.server.core.storage.management.UITemplateManagementDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IServiceLabelDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.trace.IProfileTaskLogQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.trace.IProfileTaskQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.trace.IProfileThreadSnapshotQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IAggregationQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IAlarmQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IBrowserLogQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingDataDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingScheduleDAO;
+import org.apache.skywalking.oap.server.core.storage.profiling.ebpf.IEBPFProfilingTaskDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IEventQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ILogQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IMetadataQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IMetricsQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ITagAutoCompleteQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ITopNRecordsQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ITopologyQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.ITraceQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.query.IZipkinQueryDAO;
+import org.apache.skywalking.oap.server.library.module.ModuleDefine;
 
 /**
- * @author peng-yongsheng
+ * StorageModule provides the capabilities(services) to interact with the database. With different databases, this
+ * module could have different providers, such as currently, H2, MySQL, ES, TiDB.
  */
 public class StorageModule extends ModuleDefine {
 
@@ -33,13 +53,34 @@ public class StorageModule extends ModuleDefine {
         super(NAME);
     }
 
-    @Override public Class[] services() {
+    @Override
+    public Class[] services() {
         return new Class[] {
-            IBatchDAO.class, StorageDAO.class, IRegisterLockDAO.class,
+            StorageBuilderFactory.class,
+            IBatchDAO.class,
+            StorageDAO.class,
             IHistoryDeleteDAO.class,
-            IServiceInventoryCacheDAO.class, IServiceInstanceInventoryCacheDAO.class,
-            IEndpointInventoryCacheDAO.class, INetworkAddressInventoryCacheDAO.class,
-            ITopologyQueryDAO.class, IMetricsQueryDAO.class, ITraceQueryDAO.class, IMetadataQueryDAO.class, IAggregationQueryDAO.class, IAlarmQueryDAO.class,
-            ITopNRecordsQueryDAO.class, ILogQueryDAO.class};
+            INetworkAddressAliasDAO.class,
+            ITopologyQueryDAO.class,
+            IMetricsQueryDAO.class,
+            ITraceQueryDAO.class,
+            IMetadataQueryDAO.class,
+            IAggregationQueryDAO.class,
+            IAlarmQueryDAO.class,
+            ITopNRecordsQueryDAO.class,
+            ILogQueryDAO.class,
+            IProfileTaskQueryDAO.class,
+            IProfileTaskLogQueryDAO.class,
+            IProfileThreadSnapshotQueryDAO.class,
+            UITemplateManagementDAO.class,
+            IBrowserLogQueryDAO.class,
+            IEventQueryDAO.class,
+            IEBPFProfilingTaskDAO.class,
+            IEBPFProfilingScheduleDAO.class,
+            IEBPFProfilingDataDAO.class,
+            IServiceLabelDAO.class,
+            ITagAutoCompleteQueryDAO.class,
+            IZipkinQueryDAO.class
+        };
     }
 }

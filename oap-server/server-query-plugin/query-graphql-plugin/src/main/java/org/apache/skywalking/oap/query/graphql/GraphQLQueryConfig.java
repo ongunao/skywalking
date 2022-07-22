@@ -18,18 +18,18 @@
 
 package org.apache.skywalking.oap.query.graphql;
 
-import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.skywalking.oap.server.library.module.ModuleConfig;
 
 /**
  * The config of {@code query.graphql}.
- *
- * @author gaohongtao
  */
-@Getter(AccessLevel.PACKAGE)
-@Setter(AccessLevel.PUBLIC)
+@Getter
+@Setter
 public class GraphQLQueryConfig extends ModuleConfig {
-    private String path;
+    private boolean enableLogTestTool;
+    private int maxQueryComplexity = 1000;
+    private boolean enableUpdateUITemplate = false;
+    private boolean enableOnDemandPodLog = false;
 }

@@ -18,38 +18,111 @@
 
 package org.apache.skywalking.oap.server.core.source;
 
-import lombok.*;
-import org.apache.skywalking.oap.server.core.Const;
+import lombok.Getter;
+import lombok.Setter;
+import org.apache.skywalking.oap.server.core.analysis.Layer;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
+import org.apache.skywalking.oap.server.core.analysis.IDManager;
 
 import static org.apache.skywalking.oap.server.core.source.DefaultScopeDefine.SERVICE_INSTANCE_RELATION;
+import static org.apache.skywalking.oap.server.core.source.DefaultScopeDefine.SERVICE_INSTANCE_RELATION_CATALOG_NAME;
 
-/**
- * @author peng-yongsheng
- */
-@ScopeDeclaration(id = SERVICE_INSTANCE_RELATION, name = "ServiceInstanceRelation")
+@ScopeDeclaration(id = SERVICE_INSTANCE_RELATION, name = "ServiceInstanceRelation", catalog = SERVICE_INSTANCE_RELATION_CATALOG_NAME)
+@ScopeDefaultColumn.VirtualColumnDefinition(fieldName = "entityId", columnName = "entity_id", isID = true, type = String.class)
 public class ServiceInstanceRelation extends Source {
+    private String entityId;
 
-    @Override public int scope() {
+    @Override
+    public int scope() {
         return DefaultScopeDefine.SERVICE_INSTANCE_RELATION;
     }
 
-    @Override public String getEntityId() {
-        return String.valueOf(sourceServiceInstanceId) + Const.ID_SPLIT + String.valueOf(destServiceInstanceId) + Const.ID_SPLIT + String.valueOf(componentId);
+    @Override
+    public String getEntityId() {
+        if (StringUtil.isEmpty(entityId)) {
+            entityId = IDManager.ServiceInstanceID.buildRelationId(
+                new IDManager.ServiceInstanceID.ServiceInstanceRelationDefine(
+                    sourceServiceInstanceId,
+                    destServiceInstanceId
+                )
+            );
+        }
+        return entityId;
     }
 
-    @Getter @Setter private int sourceServiceInstanceId;
-    @Getter @Setter private int sourceServiceId;
-    @Getter @Setter private String sourceServiceName;
-    @Getter @Setter private String sourceServiceInstanceName;
-    @Getter @Setter private int destServiceInstanceId;
-    @Getter @Setter private int destServiceId;
-    @Getter @Setter private String destServiceName;
-    @Getter @Setter private String destServiceInstanceName;
-    @Getter @Setter private String endpoint;
-    @Getter @Setter private int componentId;
-    @Getter @Setter private int latency;
-    @Getter @Setter private boolean status;
-    @Getter @Setter private int responseCode;
-    @Getter @Setter private RequestType type;
-    @Getter @Setter private DetectPoint detectPoint;
+    @Getter
+    private String sourceServiceInstanceId;
+    @Getter
+    private String sourceServiceId;
+    @Getter
+    @Setter
+    @ScopeDefaultColumn.DefinedByField(columnName = "source_service_name", requireDynamicActive = true)
+    private String sourceServiceName;
+    @Getter
+    @Setter
+    private Layer sourceServiceLayer;
+    @Getter
+    @Setter
+    @ScopeDefaultColumn.DefinedByField(columnName = "source_service_instance_name", requireDynamicActive = true)
+    private String sourceServiceInstanceName;
+    @Getter
+    private String destServiceInstanceId;
+    @Getter
+    private String destServiceId;
+    @Getter
+    @Setter
+    private Layer destServiceLayer;
+    @Getter
+    @Setter
+    @ScopeDefaultColumn.DefinedByField(columnName = "dest_service_name", requireDynamicActive = true)
+    private String destServiceName;
+    @Getter
+    @Setter
+    @ScopeDefaultColumn.DefinedByField(columnName = "dest_service_instance_name", requireDynamicActive = true)
+    private String destServiceInstanceName;
+    @Getter
+    @Setter
+    private String endpoint;
+    @Getter
+    @Setter
+    private int componentId;
+    @Getter
+    @Setter
+    private int latency;
+    @Getter
+    @Setter
+    private boolean status;
+    @Getter
+    @Setter
+    @Deprecated
+    private int responseCode;
+    @Getter
+    @Setter
+    private int httpResponseStatusCode;
+    @Getter
+    @Setter
+    private String rpcStatusCode;
+    @Getter
+    @Setter
+    private RequestType type;
+    @Getter
+    @Setter
+    private DetectPoint detectPoint;
+    @Getter
+    @Setter
+    private String tlsMode;
+    @Getter
+    @Setter
+    private SideCar sideCar = new SideCar();
+    @Getter
+    @Setter
+    private TCPInfo tcpInfo = new TCPInfo();
+
+    @Override
+    public void prepare() {
+        sourceServiceId = IDManager.ServiceID.buildId(sourceServiceName, sourceServiceLayer.isNormal());
+        destServiceId = IDManager.ServiceID.buildId(destServiceName, destServiceLayer.isNormal());
+        sourceServiceInstanceId = IDManager.ServiceInstanceID.buildId(sourceServiceId, sourceServiceInstanceName);
+        destServiceInstanceId = IDManager.ServiceInstanceID.buildId(destServiceId, destServiceInstanceName);
+    }
 }

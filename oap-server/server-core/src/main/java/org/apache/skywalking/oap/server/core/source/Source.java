@@ -18,15 +18,12 @@
 
 package org.apache.skywalking.oap.server.core.source;
 
-import lombok.*;
+import lombok.Getter;
+import lombok.Setter;
 
-/**
- * @author peng-yongsheng
- */
-public abstract class Source {
-    public abstract int scope();
+public abstract class Source implements ISource {
 
-    @Getter @Setter private long timeBucket;
-
-    public abstract String getEntityId();
+    @Getter
+    @Setter
+    private long timeBucket;
 }

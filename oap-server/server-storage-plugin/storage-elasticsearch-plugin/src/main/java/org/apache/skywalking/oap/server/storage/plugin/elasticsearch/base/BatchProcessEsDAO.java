@@ -19,56 +19,66 @@
 package org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.skywalking.library.elasticsearch.bulk.BulkProcessor;
 import org.apache.skywalking.oap.server.core.storage.IBatchDAO;
 import org.apache.skywalking.oap.server.library.client.elasticsearch.ElasticSearchClient;
+import org.apache.skywalking.oap.server.library.client.elasticsearch.IndexRequestWrapper;
+import org.apache.skywalking.oap.server.library.client.elasticsearch.UpdateRequestWrapper;
+import org.apache.skywalking.oap.server.library.client.request.InsertRequest;
+import org.apache.skywalking.oap.server.library.client.request.PrepareRequest;
 import org.apache.skywalking.oap.server.library.util.CollectionUtils;
-import org.elasticsearch.action.bulk.BulkProcessor;
-import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.update.UpdateRequest;
-import org.slf4j.*;
 
-/**
- * @author peng-yongsheng
- */
+@Slf4j
 public class BatchProcessEsDAO extends EsDAO implements IBatchDAO {
-
-    private static final Logger logger = LoggerFactory.getLogger(BatchProcessEsDAO.class);
-
-    private BulkProcessor bulkProcessor;
+    private volatile BulkProcessor bulkProcessor;
     private final int bulkActions;
-    private final int bulkSize;
     private final int flushInterval;
     private final int concurrentRequests;
 
-    public BatchProcessEsDAO(ElasticSearchClient client, int bulkActions, int bulkSize, int flushInterval,
-        int concurrentRequests) {
+    public BatchProcessEsDAO(ElasticSearchClient client,
+                             int bulkActions,
+                             int flushInterval,
+                             int concurrentRequests) {
         super(client);
         this.bulkActions = bulkActions;
-        this.bulkSize = bulkSize;
         this.flushInterval = flushInterval;
         this.concurrentRequests = concurrentRequests;
     }
 
-    @Override public void batchPersistence(List<?> batchCollection) {
+    @Override
+    public void insert(InsertRequest insertRequest) {
         if (bulkProcessor == null) {
-            this.bulkProcessor = getClient().createBulkProcessor(bulkActions, bulkSize, flushInterval, concurrentRequests);
-        }
-
-        if (logger.isDebugEnabled()) {
-            logger.debug("bulk data size: {}", batchCollection.size());
-        }
-
-        if (CollectionUtils.isNotEmpty(batchCollection)) {
-            batchCollection.forEach(builder -> {
-                if (builder instanceof IndexRequest) {
-                    this.bulkProcessor.add((IndexRequest)builder);
+            synchronized (this) {
+                if (bulkProcessor == null) {
+                    this.bulkProcessor = getClient().createBulkProcessor(bulkActions, flushInterval, concurrentRequests);
                 }
-                if (builder instanceof UpdateRequest) {
-                    this.bulkProcessor.add((UpdateRequest)builder);
-                }
-            });
+            }
         }
 
-        this.bulkProcessor.flush();
+        this.bulkProcessor.add(((IndexRequestWrapper) insertRequest).getRequest());
+    }
+
+    @Override
+    public CompletableFuture<Void> flush(List<PrepareRequest> prepareRequests) {
+        if (bulkProcessor == null) {
+            synchronized (this) {
+                if (bulkProcessor == null) {
+                    this.bulkProcessor = getClient().createBulkProcessor(bulkActions, flushInterval, concurrentRequests);
+                }
+            }
+        }
+
+        if (CollectionUtils.isNotEmpty(prepareRequests)) {
+            return CompletableFuture.allOf(prepareRequests.stream().map(prepareRequest -> {
+                if (prepareRequest instanceof InsertRequest) {
+                    return bulkProcessor.add(((IndexRequestWrapper) prepareRequest).getRequest());
+                } else {
+                    return bulkProcessor.add(((UpdateRequestWrapper) prepareRequest).getRequest());
+                }
+            }).toArray(CompletableFuture[]::new));
+        }
+        return CompletableFuture.completedFuture(null);
     }
 }

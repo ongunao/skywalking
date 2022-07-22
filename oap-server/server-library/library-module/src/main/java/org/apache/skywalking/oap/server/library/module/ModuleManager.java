@@ -18,15 +18,16 @@
 
 package org.apache.skywalking.oap.server.library.module;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.ServiceLoader;
 
 /**
  * The <code>ModuleManager</code> takes charge of all {@link ModuleDefine}s in collector.
- *
- * @author wu-sheng, peng-yongsheng
  */
 public class ModuleManager implements ModuleDefineHolder {
-
     private boolean isInPrepareStage = true;
     private final Map<String, ModuleDefine> loadedModules = new HashMap<>();
 
@@ -37,27 +38,21 @@ public class ModuleManager implements ModuleDefineHolder {
         ApplicationConfiguration applicationConfiguration) throws ModuleNotFoundException, ProviderNotFoundException, ServiceNotProvidedException, CycleDependencyException, ModuleConfigException, ModuleStartException {
         String[] moduleNames = applicationConfiguration.moduleList();
         ServiceLoader<ModuleDefine> moduleServiceLoader = ServiceLoader.load(ModuleDefine.class);
-        LinkedList<String> moduleList = new LinkedList<>(Arrays.asList(moduleNames));
+        ServiceLoader<ModuleProvider> moduleProviderLoader = ServiceLoader.load(ModuleProvider.class);
+
+        HashSet<String> moduleSet = new HashSet<>(Arrays.asList(moduleNames));
         for (ModuleDefine module : moduleServiceLoader) {
-            for (String moduleName : moduleNames) {
-                if (moduleName.equals(module.name())) {
-                    ModuleDefine newInstance;
-                    try {
-                        newInstance = module.getClass().newInstance();
-                    } catch (InstantiationException | IllegalAccessException e) {
-                        throw new ModuleNotFoundException(e);
-                    }
-                    newInstance.prepare(this, applicationConfiguration.getModuleConfiguration(moduleName));
-                    loadedModules.put(moduleName, newInstance);
-                    moduleList.remove(moduleName);
-                }
+            if (moduleSet.contains(module.name())) {
+                module.prepare(this, applicationConfiguration.getModuleConfiguration(module.name()), moduleProviderLoader);
+                loadedModules.put(module.name(), module);
+                moduleSet.remove(module.name());
             }
         }
         // Finish prepare stage
         isInPrepareStage = false;
 
-        if (moduleList.size() > 0) {
-            throw new ModuleNotFoundException(moduleList.toString() + " missing.");
+        if (moduleSet.size() > 0) {
+            throw new ModuleNotFoundException(moduleSet.toString() + " missing.");
         }
 
         BootstrapFlow bootstrapFlow = new BootstrapFlow(loadedModules);
@@ -66,11 +61,13 @@ public class ModuleManager implements ModuleDefineHolder {
         bootstrapFlow.notifyAfterCompleted();
     }
 
-    @Override public boolean has(String moduleName) {
+    @Override
+    public boolean has(String moduleName) {
         return loadedModules.get(moduleName) != null;
     }
 
-    @Override public ModuleProviderHolder find(String moduleName) throws ModuleNotFoundRuntimeException {
+    @Override
+    public ModuleProviderHolder find(String moduleName) throws ModuleNotFoundRuntimeException {
         assertPreparedStage();
         ModuleDefine module = loadedModules.get(moduleName);
         if (module != null)

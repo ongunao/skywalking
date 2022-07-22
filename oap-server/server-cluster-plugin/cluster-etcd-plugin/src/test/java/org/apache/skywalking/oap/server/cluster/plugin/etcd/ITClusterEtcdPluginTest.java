@@ -18,59 +18,75 @@
 
 package org.apache.skywalking.oap.server.cluster.plugin.etcd;
 
-import com.google.gson.Gson;
-import java.net.URI;
+import io.etcd.jetcd.ByteSequence;
+import io.etcd.jetcd.Client;
+import io.etcd.jetcd.kv.GetResponse;
+import io.etcd.jetcd.options.GetOption;
+import java.nio.charset.Charset;
+import java.util.Collections;
 import java.util.List;
-import mousio.etcd4j.EtcdClient;
-import mousio.etcd4j.responses.EtcdKeysResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.skywalking.oap.server.core.cluster.RemoteInstance;
 import org.apache.skywalking.oap.server.core.remote.client.Address;
-import org.junit.After;
+import org.apache.skywalking.oap.server.library.module.ModuleDefineHolder;
+import org.apache.skywalking.oap.server.telemetry.api.HealthCheckMetrics;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.powermock.reflect.Whitebox;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.utility.DockerImageName;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.mock;
 
-/**
- * @author Alan Lau
- */
+@Slf4j
 public class ITClusterEtcdPluginTest {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(ITClusterEtcdPluginTest.class);
-
     private ClusterModuleEtcdConfig etcdConfig;
 
-    private EtcdClient client;
+    private Client client;
+
+    private final HealthCheckMetrics healthChecker = mock(HealthCheckMetrics.class);
 
     private EtcdCoordinator coordinator;
 
-    private Gson gson = new Gson();
-
-    private Address remoteAddress = new Address("10.0.0.1", 1000, false);
-    private Address selfRemoteAddress = new Address("10.0.0.2", 1001, true);
-
-    private Address internalAddress = new Address("10.0.0.3", 1002, false);
+    private final Address remoteAddress = new Address("10.0.0.1", 1000, false);
+    private final Address selfRemoteAddress = new Address("10.0.0.2", 1001, true);
+    private final Address internalAddress = new Address("10.0.0.3", 1002, false);
 
     private static final String SERVICE_NAME = "my-service";
 
+    @Rule
+    public final GenericContainer<?> container =
+        new GenericContainer<>(DockerImageName.parse("quay.io/coreos/etcd:v3.5.0"))
+            .waitingFor(Wait.forLogMessage(".*ready to serve client requests.*", 1))
+            .withEnv(Collections.singletonMap("ALLOW_NONE_AUTHENTICATION", "yes"))
+            .withCommand(
+                "etcd",
+                "--advertise-client-urls", "http://0.0.0.0:2379",
+                "--listen-client-urls", "http://0.0.0.0:2379"
+            );
+
     @Before
     public void before() throws Exception {
-        String etcdHost = System.getProperty("etcd.host");
-        String port = System.getProperty("etcd.port");
-        String baseUrl = "http://" + etcdHost + ":" + port;
-        LOGGER.info("etcd baseURL: {}", baseUrl);
-        etcdConfig = new ClusterModuleEtcdConfig();
-        etcdConfig.setServiceName(SERVICE_NAME);
-        client = new EtcdClient(URI.create(baseUrl));
-        coordinator = new EtcdCoordinator(etcdConfig, client);
-    }
+        String baseUrl = "http://" + container.getHost() + ":" + container.getMappedPort(2379);
+        System.setProperty("etcd.endpoint", baseUrl);
 
-    @After
-    public void after() throws Exception {
-        client.close();
+        etcdConfig = new ClusterModuleEtcdConfig();
+        etcdConfig.setEndpoints(baseUrl);
+        etcdConfig.setNamespace("skywalking/");
+
+        etcdConfig.setServiceName(SERVICE_NAME);
+        doNothing().when(healthChecker).health();
+
+        ModuleDefineHolder manager = mock(ModuleDefineHolder.class);
+        coordinator = new EtcdCoordinator(manager, etcdConfig);
+
+        client = Whitebox.getInternalState(coordinator, "client");
+        Whitebox.setInternalState(coordinator, "healthChecker", healthChecker);
     }
 
     @Test
@@ -124,12 +140,20 @@ public class ITClusterEtcdPluginTest {
     }
 
     private void clear() throws Throwable {
-        EtcdKeysResponse response = client.get(SERVICE_NAME + "/").send().get();
-        List<EtcdKeysResponse.EtcdNode> nodes = response.getNode().getNodes();
+        ByteSequence prefix = ByteSequence.from(SERVICE_NAME + "/", Charset.defaultCharset());
+        GetResponse response = client.getKVClient()
+                                     .get(
+                                         ByteSequence.EMPTY,
+                                         GetOption.newBuilder().withPrefix(prefix).build()
+                                     ).get();
 
-        for (EtcdKeysResponse.EtcdNode node : nodes) {
-            client.delete(node.getKey()).send().get();
-        }
+        response.getKvs().forEach(e -> {
+            try {
+                client.getKVClient().delete(e.getKey()).get();
+            } catch (Exception exp) {
+                log.error("", exp);
+            }
+        });
     }
 
     private void verifyRegistration(Address remoteAddress, EtcdEndpoint endpoint) {
@@ -141,7 +165,10 @@ public class ITClusterEtcdPluginTest {
 
     private EtcdEndpoint buildEndpoint(RemoteInstance instance) {
         Address address = instance.getAddress();
-        EtcdEndpoint endpoint = new EtcdEndpoint.Builder().host(address.getHost()).port(address.getPort()).serviceName(SERVICE_NAME).build();
+        EtcdEndpoint endpoint = new EtcdEndpoint.Builder().host(address.getHost())
+                                                          .port(address.getPort())
+                                                          .serviceName(SERVICE_NAME)
+                                                          .build();
         return endpoint;
     }
 

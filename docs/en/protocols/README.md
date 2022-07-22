@@ -1,139 +1,61 @@
-# Protocols
-There are two types of protocols list here. 
+# Probe Protocols
+Probe protocols describe and define how agents send collected metrics, logs, traces, and events, as well as set out the format of each entity.
 
-- [**Probe Protocol**](#probe-protocols). Include the descriptions and definitions about how agent send collected metrics data and traces, also the formats of each entities.
+### Tracing
+There are two types of protocols that help language agents work in distributed tracing.
 
-- [**Query Protocol**](#query-protocol). The backend provide query capability to SkyWalking own UI and others. These queries are based on GraphQL.
+- **Cross Process Propagation Headers Protocol** and **Cross Process Correlation Headers Protocol** come in in-wire data format. Agent/SDK usually uses HTTP/MQ/HTTP2 headers to carry the data with the RPC request. The remote agent will receive this in the request handler, and bind the context with this specific request. 
 
+[Cross Process Propagation Headers Protocol v3](Skywalking-Cross-Process-Propagation-Headers-Protocol-v3.md) has been the new protocol for in-wire context propagation since the version 8.0.0 release.
 
-## Probe Protocols
-They also related to the probe group, for understand that, look [Concepts and Designs](../concepts-and-designs/README.md) document.
-These groups are **Language based native agent protocol**, **Service Mesh protocol** and **3rd-party instrument protocol**.
+[Cross Process Correlation Headers Protocol v1](Skywalking-Cross-Process-Correlation-Headers-Protocol-v1.md) is a new in-wire context propagation protocol which is additional and optional. 
+Please read SkyWalking language agents documentation to see whether it is supported.
 
-## Register Protocol
-Include service, service instance, network address and endpoint meta data register.
-Purposes of register are
-1. For service, network address and endpoint, register returns the unique ID of register object, usually an integer. Probe
-can use that to represent the literal String for data compression. Further, some protocols accept IDs only.
-1. For service instance, register returns a new unique ID for every new instance. Every service instance register must contain the 
-service ID.
- 
+- **Trace Data Protocol** is an out-of-wire data format. Agent/SDK uses this to send traces to SkyWalking OAP server.
 
+[SkyWalking Trace Data Protocol v3](Trace-Data-Protocol-v3.md) defines the communication method and format between the agent and backend.
 
-### Language based native agent protocol
-There is two types of protocols to make language agents work in distributed environments.
-1. **Cross Process Propagation Headers Protocol** is in wire data format, agent/SDK usually uses HTTP/MQ/HTTP2 headers
-to carry the data with rpc request. The remote agent will receive this in the request handler, and bind the context 
-with this specific request.
-1. **Trace Data Protocol** is out of wire data, agent/SDK uses this to send traces and metrics to skywalking or other
-compatible backend. 
+### Logging
+- **Log Data Protocol** is an out-of-wire data format. Agent/SDK and collector use this to send logs into SkyWalking OAP server.
+[SkyWalking Log Data Protocol](Log-Data-Protocol.md) defines the communication method and format between the agent and backend.
 
-Header protocol have two formats for compatible. Using v2 in default.
-* [Cross Process Propagation Headers Protocol v2](Skywalking-Cross-Process-Propagation-Headers-Protocol-v2.md) is the new protocol for 
-in-wire context propagation, started in 6.0.0-beta release. It will replace the old **SW3** protocol in the future, now both of them are supported.
-* [Cross Process Propagation Headers Protocol v1](Skywalking-Cross-Process-Propagation-Headers-Protocol-v1.md) is for in-wire propagation.
-By following this protocol, the trace segments in different processes could be linked.
+### Metrics
 
-Since SkyWalking v6.0.0-beta, SkyWalking agent and backend are using Trace Data Protocol v2, and v1 is still supported in backend.
-* [SkyWalking Trace Data Protocol v2](Trace-Data-Protocol-v2.md) define the communication way and format between agent and backend
-* [SkyWalking Trace Data Protocol v1](Trace-Data-Protocol-v1.md). This protocol is used in old version. Still supported.
+SkyWalking has a native metrics format, and supports widely used metric formats, such as Prometheus, OpenCensus, and Zabbix.
 
+The native metrics format definition could be found [here](https://github.com/apache/skywalking-data-collect-protocol/blob/master/language-agent/Meter.proto).
+Typically, the agent meter plugin (e.g. [Java Meter Plugin](https://skywalking.apache.org/docs/skywalking-java/latest/en/setup/service-agent/java-agent/java-plugin-development-guide/#meter-plugin)) and
+Satellite [Prometheus fetcher](https://skywalking.apache.org/docs/skywalking-satellite/latest/en/setup/plugins/fetcher_prometheus-metrics-fetcher/)
+would convert metrics into native format and forward them to SkyWalking OAP server.
 
-### Service Mesh probe protocol
-The probe in sidecar or proxy could use this protocol to send data to backendEnd. This service provided by gRPC, requires 
-the following key info:
+To learn more about receiving 3rd party formats metrics, see [Meter receiver](../setup/backend/backend-meter.md) and [OpenTelemetry receiver](../setup/backend/opentelemetry-receiver.md).
 
-1. Service Name or ID at both sides.
-1. Service Instance Name or ID at both sides.
-1. Endpoint. URI in HTTP, service method full signature in gRPC.
-1. Latency. In milliseconds.
-1. Response code in HTTP
-1. Status. Success or fail.
-1. Protocol. HTTP, gRPC
-1. DetectPoint. In Service Mesh sidecar, `client` or `server`. In normal L7 proxy, value is `proxy`.
+### Browser probe protocol
 
+The browser probe, such as  [skywalking-client-js](https://github.com/apache/skywalking-client-js), could use this protocol to send data to the backend. This service is provided by gRPC.
 
-### 3rd-party instrument protocol
-3rd-party instrument protocols are not defined by SkyWalking. They are just protocols/formats, which SkyWalking is compatible and
-could receive from their existed libraries. SkyWalking starts with supporting Zipkin v1, v2 data formats.
+[SkyWalking Browser Protocol](Browser-Protocol.md) defines the communication method and format between `skywalking-client-js` and backend.
 
-Backend is based on modularization principle, so very easy to extend a new receiver to support new protocol/format.
+### Events Report Protocol
 
-## Query Protocol
-Query protocol follows GraphQL grammar, provides data query capabilities, which depends on your analysis metrics.
+The protocol is used to report events to the backend. The [doc](../concepts-and-designs/event.md) introduces the definition of an event, and [the protocol repository](https://github.com/apache/skywalking-data-collect-protocol/blob/master/event) defines gRPC services and message formats of events.
 
-There are 5 dimensionality data is provided.
-1. Metadata. Metadata includes the brief info of the whole under monitoring services and their instances, endpoints, etc.
-Use multiple ways to query this meta data.
-1. Topology. Show the topology and dependency graph of services or endpoints. Including direct relationship or global map.
-1. Metrics. Metrics query targets all the objects defined in [OAL script](../concepts-and-designs/oal.md). You could get the 
-metrics data in linear or thermodynamic matrix formats based on the aggregation functions in script. 
-1. Aggregation. Aggregation query means the metrics data need a secondary aggregation in query stage, which makes the query 
-interfaces have some different arguments. Such as, `TopN` list of services is a very typical aggregation query, 
-metrics stream aggregation just calculates the metrics values of each service, but the expected list needs ordering metrics data
-by the values.
-1. Trace. Query distributed traces by this.
-1. Alarm. Through alarm query, you can have alarm trend and details.
-
-The actual query GraphQL scrips could be found inside `query-protocol` folder in [here](../../../oap-server/server-query-plugin/query-graphql-plugin/src/main/resources).
-
-Here is the list of all existing metrics names, based on [official_analysis.oal](../../../oap-server/generated-analysis/src/main/resources/official_analysis.oal)
-
-**Global metrics**
-- all_p99, p99 response time of all services
-- all_p95
-- all_p90
-- all_p75
-- all_p70
-- all_heatmap, the response time heatmap of all services 
-
-**Service metrics**
-- service_resp_time, avg response time of service
-- service_sla, successful rate of service
-- service_cpm, calls per minute of service
-- service_p99, p99 response time of service
-- service_p95
-- service_p90
-- service_p75
-- service_p50
-
-**Service instance metrics**
-- service_instance_sla, successful rate of service instance
-- service_instance_resp_time, avg response time of service instance
-- service_instance_cpm, calls per minute of service instance
-
-**Endpoint metrics**
-- endpoint_cpm, calls per minute of endpoint
-- endpoint_avg, avg response time of endpoint
-- endpoint_sla, successful rate of endpoint
-- endpoint_p99, p99 response time of endpoint
-- endpoint_p95
-- endpoint_p90
-- endpoint_p75
-- endpoint_p50
-
-**JVM metrics**, JVM related metrics, only work when javaagent is active
-- instance_jvm_cpu
-- instance_jvm_memory_heap
-- instance_jvm_memory_noheap
-- instance_jvm_memory_heap_max
-- instance_jvm_memory_noheap_max
-- instance_jvm_young_gc_time
-- instance_jvm_old_gc_time
-- instance_jvm_young_gc_count
-- instance_jvm_old_gc_count
-
-**Service relation metrics**, represents the metrics of calls between service. 
-The metrics ID could be
-got in topology query only.
-- service_relation_client_cpm, calls per minute detected at client side
-- service_relation_server_cpm, calls per minute detected at server side
-- service_relation_client_call_sla, successful rate detected at client side
-- service_relation_server_call_sla, successful rate detected at server side
-- service_relation_client_resp_time, avg response time detected at client side
-- service_relation_server_resp_time, avg response time detected at server side
-
-**Endpoint relation metrics**, represents the metrics between dependency endpoints. Only work when tracing agent.
-The metrics ID could be got in topology query only.
-- endpoint_relation_cpm
-- endpoint_relation_resp_time
+`JSON` format events can be reported via HTTP API. The endpoint is `http://<oap-address>:12800/v3/events`.
+Example of a JSON event record:
+```json
+[
+    {
+        "uuid": "f498b3c0-8bca-438d-a5b0-3701826ae21c",
+        "source": {
+            "service": "SERVICE-A",
+            "instance": "INSTANCE-1"
+        },
+        "name": "Reboot",
+        "type": "Normal",
+        "message": "App reboot.",
+        "parameters": {},
+        "startTime": 1628044330000,
+        "endTime": 1628044331000
+    }
+]
+```

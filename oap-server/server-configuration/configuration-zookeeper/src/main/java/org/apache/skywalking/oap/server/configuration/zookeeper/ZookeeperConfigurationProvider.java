@@ -26,8 +26,6 @@ import org.apache.skywalking.oap.server.library.module.ModuleStartException;
 
 /**
  * Get configuration from Zookeeper.
- *
- * @author zhaoyuguang
  */
 public class ZookeeperConfigurationProvider extends AbstractConfigurationProvider {
     private ZookeeperServerSettings settings;
@@ -51,8 +49,8 @@ public class ZookeeperConfigurationProvider extends AbstractConfigurationProvide
         if (Strings.isNullOrEmpty(settings.getHostPort())) {
             throw new ModuleStartException("Zookeeper hostPort cannot be null or empty.");
         }
-        if (Strings.isNullOrEmpty(settings.getNameSpace())) {
-            throw new ModuleStartException("Zookeeper nameSpace cannot be null or empty.");
+        if (Strings.isNullOrEmpty(settings.getNamespace())) {
+            throw new ModuleStartException("Zookeeper namespace cannot be null or empty.");
         }
 
         try {

@@ -20,25 +20,38 @@ package org.apache.skywalking.oap.server.storage.plugin.elasticsearch.query;
 
 import com.google.common.base.Strings;
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import org.apache.skywalking.library.elasticsearch.requests.search.BoolQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Query;
+import org.apache.skywalking.library.elasticsearch.requests.search.RangeQueryBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Search;
+import org.apache.skywalking.library.elasticsearch.requests.search.SearchBuilder;
+import org.apache.skywalking.library.elasticsearch.requests.search.Sort;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchHit;
+import org.apache.skywalking.library.elasticsearch.response.search.SearchResponse;
+import org.apache.skywalking.oap.server.core.analysis.IDManager;
+import org.apache.skywalking.oap.server.core.analysis.manual.searchtag.Tag;
 import org.apache.skywalking.oap.server.core.analysis.manual.segment.SegmentRecord;
-import org.apache.skywalking.oap.server.core.query.entity.*;
+import org.apache.skywalking.oap.server.core.query.type.BasicTrace;
+import org.apache.skywalking.oap.server.core.query.type.QueryOrder;
+import org.apache.skywalking.oap.server.core.query.type.Span;
+import org.apache.skywalking.oap.server.core.query.type.TraceBrief;
+import org.apache.skywalking.oap.server.core.query.type.TraceState;
 import org.apache.skywalking.oap.server.core.storage.query.ITraceQueryDAO;
+import org.apache.skywalking.oap.server.core.storage.type.HashMapConverter;
 import org.apache.skywalking.oap.server.library.client.elasticsearch.ElasticSearchClient;
 import org.apache.skywalking.oap.server.library.util.BooleanUtils;
-import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.*;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.index.query.*;
-import org.elasticsearch.search.SearchHit;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.sort.SortOrder;
+import org.apache.skywalking.oap.server.library.util.CollectionUtils;
+import org.apache.skywalking.oap.server.library.util.StringUtil;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.EsDAO;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.IndexController;
+import org.apache.skywalking.oap.server.storage.plugin.elasticsearch.base.TimeRangeIndexNameGenerator;
 
-/**
- * @author peng-yongsheng
- */
 public class TraceQueryEsDAO extends EsDAO implements ITraceQueryDAO {
 
-    private int segmentQueryMaxSize;
+    private final int segmentQueryMaxSize;
 
     public TraceQueryEsDAO(ElasticSearchClient client, int segmentQueryMaxSize) {
         super(client);
@@ -46,113 +59,126 @@ public class TraceQueryEsDAO extends EsDAO implements ITraceQueryDAO {
     }
 
     @Override
-    public TraceBrief queryBasicTraces(long startSecondTB, long endSecondTB, long minDuration,
-        long maxDuration, String endpointName, int serviceId, int serviceInstanceId, int endpointId, String traceId,
-        int limit, int from, TraceState traceState, QueryOrder queryOrder) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-
-        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        sourceBuilder.query(boolQueryBuilder);
-        List<QueryBuilder> mustQueryList = boolQueryBuilder.must();
+    public TraceBrief queryBasicTraces(long startSecondTB,
+                                       long endSecondTB,
+                                       long minDuration,
+                                       long maxDuration,
+                                       String serviceId,
+                                       String serviceInstanceId,
+                                       String endpointId,
+                                       String traceId,
+                                       int limit,
+                                       int from,
+                                       TraceState traceState,
+                                       QueryOrder queryOrder,
+                                       final List<Tag> tags) throws IOException {
+        final BoolQueryBuilder query = Query.bool();
 
         if (startSecondTB != 0 && endSecondTB != 0) {
-            mustQueryList.add(QueryBuilders.rangeQuery(SegmentRecord.TIME_BUCKET).gte(startSecondTB).lte(endSecondTB));
+            query.must(Query.range(SegmentRecord.TIME_BUCKET).gte(startSecondTB).lte(endSecondTB));
         }
 
         if (minDuration != 0 || maxDuration != 0) {
-            RangeQueryBuilder rangeQueryBuilder = QueryBuilders.rangeQuery(SegmentRecord.LATENCY);
+            RangeQueryBuilder rangeQueryBuilder = Query.range(SegmentRecord.LATENCY);
             if (minDuration != 0) {
                 rangeQueryBuilder.gte(minDuration);
             }
             if (maxDuration != 0) {
                 rangeQueryBuilder.lte(maxDuration);
             }
-            boolQueryBuilder.must().add(rangeQueryBuilder);
+            query.must(rangeQueryBuilder);
         }
-        if (!Strings.isNullOrEmpty(endpointName)) {
-            String matchCName = MatchCNameBuilder.INSTANCE.build(SegmentRecord.ENDPOINT_NAME);
-            mustQueryList.add(QueryBuilders.matchPhraseQuery(matchCName, endpointName));
+        if (StringUtil.isNotEmpty(serviceId)) {
+            query.must(Query.term(SegmentRecord.SERVICE_ID, serviceId));
         }
-        if (serviceId != 0) {
-            boolQueryBuilder.must().add(QueryBuilders.termQuery(SegmentRecord.SERVICE_ID, serviceId));
+        if (StringUtil.isNotEmpty(serviceInstanceId)) {
+            query.must(Query.term(SegmentRecord.SERVICE_INSTANCE_ID, serviceInstanceId));
         }
-        if (serviceInstanceId != 0) {
-            boolQueryBuilder.must().add(QueryBuilders.termQuery(SegmentRecord.SERVICE_INSTANCE_ID, serviceInstanceId));
-        }
-        if (endpointId != 0) {
-            boolQueryBuilder.must().add(QueryBuilders.termQuery(SegmentRecord.ENDPOINT_ID, endpointId));
+        if (!Strings.isNullOrEmpty(endpointId)) {
+            query.must(Query.term(SegmentRecord.ENDPOINT_ID, endpointId));
         }
         if (!Strings.isNullOrEmpty(traceId)) {
-            boolQueryBuilder.must().add(QueryBuilders.termQuery(SegmentRecord.TRACE_ID, traceId));
+            query.must(Query.term(SegmentRecord.TRACE_ID, traceId));
         }
         switch (traceState) {
             case ERROR:
-                mustQueryList.add(QueryBuilders.matchQuery(SegmentRecord.IS_ERROR, BooleanUtils.TRUE));
+                query.must(Query.match(SegmentRecord.IS_ERROR, BooleanUtils.TRUE));
                 break;
             case SUCCESS:
-                mustQueryList.add(QueryBuilders.matchQuery(SegmentRecord.IS_ERROR, BooleanUtils.FALSE));
+                query.must(Query.match(SegmentRecord.IS_ERROR, BooleanUtils.FALSE));
                 break;
         }
+
+        final SearchBuilder search = Search.builder().query(query);
+
         switch (queryOrder) {
             case BY_START_TIME:
-                sourceBuilder.sort(SegmentRecord.START_TIME, SortOrder.DESC);
+                search.sort(SegmentRecord.START_TIME, Sort.Order.DESC);
                 break;
             case BY_DURATION:
-                sourceBuilder.sort(SegmentRecord.LATENCY, SortOrder.DESC);
+                search.sort(SegmentRecord.LATENCY, Sort.Order.DESC);
                 break;
         }
-        sourceBuilder.size(limit);
-        sourceBuilder.from(from);
+        if (CollectionUtils.isNotEmpty(tags)) {
+            BoolQueryBuilder tagMatchQuery = Query.bool();
+            tags.forEach(tag -> tagMatchQuery.must(Query.term(SegmentRecord.TAGS, tag.toString())));
+            query.must(tagMatchQuery);
+        }
+        search.size(limit).from(from);
 
-        SearchResponse response = getClient().search(SegmentRecord.INDEX_NAME, sourceBuilder);
-
-        TraceBrief traceBrief = new TraceBrief();
-        traceBrief.setTotal((int)response.getHits().totalHits);
+        final SearchResponse response = getClient().search(
+            new TimeRangeIndexNameGenerator(
+                IndexController.LogicIndicesRegister.getPhysicalTableName(SegmentRecord.INDEX_NAME),
+                startSecondTB,
+                endSecondTB
+            ), search.build());
+        final TraceBrief traceBrief = new TraceBrief();
 
         for (SearchHit searchHit : response.getHits().getHits()) {
             BasicTrace basicTrace = new BasicTrace();
 
-            basicTrace.setSegmentId((String)searchHit.getSourceAsMap().get(SegmentRecord.SEGMENT_ID));
-            basicTrace.setStart(String.valueOf(searchHit.getSourceAsMap().get(SegmentRecord.START_TIME)));
-            basicTrace.getEndpointNames().add((String)searchHit.getSourceAsMap().get(SegmentRecord.ENDPOINT_NAME));
-            basicTrace.setDuration(((Number)searchHit.getSourceAsMap().get(SegmentRecord.LATENCY)).intValue());
-            basicTrace.setError(BooleanUtils.valueToBoolean(((Number)searchHit.getSourceAsMap().get(SegmentRecord.IS_ERROR)).intValue()));
-            basicTrace.getTraceIds().add((String)searchHit.getSourceAsMap().get(SegmentRecord.TRACE_ID));
+            basicTrace.setSegmentId((String) searchHit.getSource().get(SegmentRecord.SEGMENT_ID));
+            basicTrace.setStart(String.valueOf(searchHit.getSource().get(SegmentRecord.START_TIME)));
+            basicTrace.getEndpointNames().add(
+                IDManager.EndpointID.analysisId(
+                    (String) searchHit.getSource().get(SegmentRecord.ENDPOINT_ID)
+                ).getEndpointName());
+            basicTrace.setDuration(((Number) searchHit.getSource().get(SegmentRecord.LATENCY)).intValue());
+            basicTrace.setError(
+                BooleanUtils.valueToBoolean(
+                    ((Number) searchHit.getSource().get(SegmentRecord.IS_ERROR)).intValue()
+                )
+            );
+            basicTrace.getTraceIds().add((String) searchHit.getSource().get(SegmentRecord.TRACE_ID));
             traceBrief.getTraces().add(basicTrace);
         }
 
         return traceBrief;
     }
 
-    @Override public List<SegmentRecord> queryByTraceId(String traceId) throws IOException {
-        SearchSourceBuilder sourceBuilder = SearchSourceBuilder.searchSource();
-        sourceBuilder.query(QueryBuilders.termQuery(SegmentRecord.TRACE_ID, traceId));
-        sourceBuilder.size(segmentQueryMaxSize);
+    @Override
+    public List<SegmentRecord> queryByTraceId(String traceId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(SegmentRecord.INDEX_NAME);
 
-        SearchResponse response = getClient().search(SegmentRecord.INDEX_NAME, sourceBuilder);
+        final SearchBuilder search =
+            Search.builder()
+                  .query(Query.term(SegmentRecord.TRACE_ID, traceId))
+                  .size(segmentQueryMaxSize);
+
+        final SearchResponse response = getClient().search(index, search.build());
 
         List<SegmentRecord> segmentRecords = new ArrayList<>();
         for (SearchHit searchHit : response.getHits().getHits()) {
-            SegmentRecord segmentRecord = new SegmentRecord();
-            segmentRecord.setSegmentId((String)searchHit.getSourceAsMap().get(SegmentRecord.SEGMENT_ID));
-            segmentRecord.setTraceId((String)searchHit.getSourceAsMap().get(SegmentRecord.TRACE_ID));
-            segmentRecord.setServiceId(((Number)searchHit.getSourceAsMap().get(SegmentRecord.SERVICE_ID)).intValue());
-            segmentRecord.setEndpointName((String)searchHit.getSourceAsMap().get(SegmentRecord.ENDPOINT_NAME));
-            segmentRecord.setStartTime(((Number)searchHit.getSourceAsMap().get(SegmentRecord.START_TIME)).longValue());
-            segmentRecord.setEndTime(((Number)searchHit.getSourceAsMap().get(SegmentRecord.END_TIME)).longValue());
-            segmentRecord.setLatency(((Number)searchHit.getSourceAsMap().get(SegmentRecord.LATENCY)).intValue());
-            segmentRecord.setIsError(((Number)searchHit.getSourceAsMap().get(SegmentRecord.IS_ERROR)).intValue());
-            String dataBinaryBase64 = (String)searchHit.getSourceAsMap().get(SegmentRecord.DATA_BINARY);
-            if (!Strings.isNullOrEmpty(dataBinaryBase64)) {
-                segmentRecord.setDataBinary(Base64.getDecoder().decode(dataBinaryBase64));
-            }
-            segmentRecord.setVersion(((Number)searchHit.getSourceAsMap().get(SegmentRecord.VERSION)).intValue());
+            SegmentRecord segmentRecord = new SegmentRecord.Builder().storage2Entity(
+                new HashMapConverter.ToEntity(searchHit.getSource()));
             segmentRecords.add(segmentRecord);
         }
         return segmentRecords;
     }
 
-    @Override public List<Span> doFlexibleTraceQuery(String traceId) throws IOException {
+    @Override
+    public List<Span> doFlexibleTraceQuery(String traceId) throws IOException {
         return Collections.emptyList();
     }
 }

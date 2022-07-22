@@ -26,101 +26,139 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.apache.skywalking.oap.server.core.Const;
-import org.apache.skywalking.oap.server.core.register.ServiceInstanceInventory;
-import org.apache.skywalking.oap.server.core.storage.StorageBuilder;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.skywalking.oap.server.core.storage.StorageData;
+import org.apache.skywalking.oap.server.core.storage.model.Model;
 import org.apache.skywalking.oap.server.core.storage.model.ModelColumn;
-import org.apache.skywalking.oap.server.core.storage.type.StorageDataType;
+import org.apache.skywalking.oap.server.core.storage.model.SQLDatabaseModelExtension;
+import org.apache.skywalking.oap.server.core.storage.type.Convert2Storage;
+import org.apache.skywalking.oap.server.core.storage.type.HashMapConverter;
+import org.apache.skywalking.oap.server.core.storage.type.StorageBuilder;
+import org.apache.skywalking.oap.server.core.storage.type.StorageDataComplexObject;
 import org.apache.skywalking.oap.server.library.client.jdbc.JDBCClientException;
 import org.apache.skywalking.oap.server.library.client.jdbc.hikaricp.JDBCHikariCPClient;
+import org.apache.skywalking.oap.server.library.util.CollectionUtils;
+import org.apache.skywalking.oap.server.storage.plugin.jdbc.ArrayParamBuilder;
 import org.apache.skywalking.oap.server.storage.plugin.jdbc.SQLBuilder;
 import org.apache.skywalking.oap.server.storage.plugin.jdbc.SQLExecutor;
 import org.apache.skywalking.oap.server.storage.plugin.jdbc.TableMetaInfo;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-/**
- * @author wusheng
- */
+@Slf4j
 public class H2SQLExecutor {
-    private static final Logger logger = LoggerFactory.getLogger(H2SQLExecutor.class);
+    protected <T extends StorageData> List<StorageData> getByIDs(JDBCHikariCPClient h2Client,
+                                                                 String modelName,
+                                                                 String[] ids,
+                                                                 StorageBuilder<T> storageBuilder) throws IOException {
+        /*
+         * Although H2 database or other database support createArrayOf and setArray operate,
+         * Mysql 5.1.44 driver doesn't.
+         */
+        String param = ArrayParamBuilder.build(ids);
 
-    protected StorageData getByID(JDBCHikariCPClient h2Client, String modelName, String id,
-        StorageBuilder storageBuilder) throws IOException {
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet rs = h2Client.executeQuery(connection, "SELECT * FROM " + modelName + " WHERE id = ?", id)) {
-                return toStorageData(rs, modelName, storageBuilder);
+        try (Connection connection = h2Client.getConnection();
+             ResultSet rs = h2Client.executeQuery(
+                 connection, "SELECT * FROM " + modelName + " WHERE id in (" + param + ")")) {
+            List<StorageData> storageDataList = new ArrayList<>();
+            StorageData storageData;
+            do {
+                storageData = toStorageData(rs, modelName, storageBuilder);
+                if (storageData != null) {
+                    storageDataList.add(storageData);
+                }
             }
-        } catch (SQLException e) {
+            while (storageData != null);
+
+            return storageDataList;
+        } catch (SQLException | JDBCClientException e) {
             throw new IOException(e.getMessage(), e);
-        } catch (JDBCClientException e) {
+        }
+    }
+
+    protected <T extends StorageData> StorageData getByID(JDBCHikariCPClient h2Client, String modelName, String id,
+                                                          StorageBuilder<T> storageBuilder) throws IOException {
+        try (Connection connection = h2Client.getConnection();
+             ResultSet rs = h2Client.executeQuery(connection, "SELECT * FROM " + modelName + " WHERE id = ?", id)) {
+            return toStorageData(rs, modelName, storageBuilder);
+        } catch (SQLException | JDBCClientException e) {
             throw new IOException(e.getMessage(), e);
         }
     }
 
     protected StorageData getByColumn(JDBCHikariCPClient h2Client, String modelName, String columnName, Object value,
-        StorageBuilder storageBuilder) throws IOException {
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet rs = h2Client.executeQuery(connection, "SELECT * FROM " + modelName + " WHERE " + columnName + " = ?", value)) {
-                return toStorageData(rs, modelName, storageBuilder);
-            }
-        } catch (SQLException e) {
-            throw new IOException(e.getMessage(), e);
-        } catch (JDBCClientException e) {
+                                      StorageBuilder<? extends StorageData> storageBuilder) throws IOException {
+        try (Connection connection = h2Client.getConnection();
+             ResultSet rs = h2Client.executeQuery(
+                 connection, "SELECT * FROM " + modelName + " WHERE " + columnName + " = ?", value)) {
+            return toStorageData(rs, modelName, storageBuilder);
+        } catch (SQLException | JDBCClientException e) {
             throw new IOException(e.getMessage(), e);
         }
     }
 
     protected StorageData toStorageData(ResultSet rs, String modelName,
-        StorageBuilder storageBuilder) throws SQLException {
+                                        StorageBuilder<? extends StorageData> storageBuilder) throws SQLException {
         if (rs.next()) {
-            Map data = new HashMap();
+            Map<String, Object> data = new HashMap<>();
             List<ModelColumn> columns = TableMetaInfo.get(modelName).getColumns();
             for (ModelColumn column : columns) {
                 data.put(column.getColumnName().getName(), rs.getObject(column.getColumnName().getStorageName()));
             }
-            return storageBuilder.map2Data(data);
+            return storageBuilder.storage2Entity(new HashMapConverter.ToEntity(data));
         }
         return null;
     }
 
-    protected int getEntityIDByID(JDBCHikariCPClient h2Client, String entityColumnName, String modelName, String id) {
-        try (Connection connection = h2Client.getConnection()) {
-            try (ResultSet rs = h2Client.executeQuery(connection, "SELECT " + entityColumnName + " FROM " + modelName + " WHERE ID=?", id)) {
-                while (rs.next()) {
-                    return rs.getInt(ServiceInstanceInventory.SEQUENCE);
-                }
-            }
-        } catch (SQLException e) {
-            logger.error(e.getMessage(), e);
-        } catch (JDBCClientException e) {
-            logger.error(e.getMessage(), e);
+    protected <T extends StorageData> SQLExecutor getInsertExecutor(String modelName, T metrics,
+                                                                    StorageBuilder<T> storageBuilder,
+                                                                    Convert2Storage<Map<String, Object>> converter) throws IOException {
+        Model model = TableMetaInfo.get(modelName);
+        storageBuilder.entity2Storage(metrics, converter);
+        Map<String, Object> objectMap = converter.obtain();
+        //build main table sql
+        Map<String, Object> mainEntity = new HashMap<>();
+        model.getColumns().forEach(column -> {
+            mainEntity.put(column.getColumnName().getName(), objectMap.get(column.getColumnName().getName()));
+        });
+        SQLExecutor sqlExecutor = buildInsertExecutor(
+            modelName, model.getColumns(), metrics, mainEntity);
+        //build additional table sql
+        for (SQLDatabaseModelExtension.AdditionalTable additionalTable : model.getSqlDBModelExtension()
+                                                                              .getAdditionalTables()
+                                                                              .values()) {
+            Map<String, Object> additionalEntity = new HashMap<>();
+            additionalTable.getColumns().forEach(column -> {
+                additionalEntity.put(column.getColumnName().getName(), objectMap.get(column.getColumnName().getName()));
+            });
+
+            List<SQLExecutor> additionalSQLExecutors = buildAdditionalInsertExecutor(
+                additionalTable.getName(), additionalTable.getColumns(), metrics, additionalEntity
+            );
+            sqlExecutor.appendAdditionalSQLs(additionalSQLExecutors);
         }
-        return Const.NONE;
+        return sqlExecutor;
     }
 
-    protected SQLExecutor getInsertExecutor(String modelName, StorageData metrics,
-        StorageBuilder storageBuilder) throws IOException {
-        Map<String, Object> objectMap = storageBuilder.data2Map(metrics);
-
-        SQLBuilder sqlBuilder = new SQLBuilder("INSERT INTO " + modelName + " VALUES");
-        List<ModelColumn> columns = TableMetaInfo.get(modelName).getColumns();
+    private <T extends StorageData> SQLExecutor buildInsertExecutor(String tableName,
+                                                                    List<ModelColumn> columns,
+                                                                    T metrics,
+                                                                    Map<String, Object> objectMap) throws IOException {
+        SQLBuilder sqlBuilder = new SQLBuilder("INSERT INTO " + tableName + " VALUES");
         List<Object> param = new ArrayList<>();
         sqlBuilder.append("(?,");
         param.add(metrics.id());
         for (int i = 0; i < columns.size(); i++) {
             ModelColumn column = columns.get(i);
-            sqlBuilder.append("?");
+                sqlBuilder.append("?");
+
+                Object value = objectMap.get(column.getColumnName().getName());
+                if (value instanceof StorageDataComplexObject) {
+                    param.add(((StorageDataComplexObject) value).toStorageData());
+                } else {
+                    param.add(value);
+                }
+
             if (i != columns.size() - 1) {
                 sqlBuilder.append(",");
-            }
-
-            Object value = objectMap.get(column.getColumnName().getName());
-            if (value instanceof StorageDataType) {
-                param.add(((StorageDataType)value).toStorageData());
-            } else {
-                param.add(value);
             }
         }
         sqlBuilder.append(")");
@@ -128,9 +166,59 @@ public class H2SQLExecutor {
         return new SQLExecutor(sqlBuilder.toString(), param);
     }
 
-    protected SQLExecutor getUpdateExecutor(String modelName, StorageData metrics,
-        StorageBuilder storageBuilder) throws IOException {
-        Map<String, Object> objectMap = storageBuilder.data2Map(metrics);
+    private <T extends StorageData> List<SQLExecutor> buildAdditionalInsertExecutor(String tableName,
+                                                                                    List<ModelColumn> columns,
+                                                                                    T metrics,
+                                                                                    Map<String, Object> objectMap) throws IOException {
+
+        List<SQLExecutor> sqlExecutors = new ArrayList<>();
+        SQLBuilder sqlBuilder = new SQLBuilder("INSERT INTO " + tableName + " VALUES");
+        List<Object> param = new ArrayList<>();
+        sqlBuilder.append("(?,");
+        param.add(metrics.id());
+        int position = 0;
+        List valueList = new ArrayList();
+        for (int i = 0; i < columns.size(); i++) {
+            ModelColumn column = columns.get(i);
+            if (List.class.isAssignableFrom(column.getType())) {
+                valueList = (List) objectMap.get(column.getColumnName().getName());
+                sqlBuilder.append("?");
+                param.add(null);
+                position = i + 1;
+            } else {
+                sqlBuilder.append("?");
+                Object value = objectMap.get(column.getColumnName().getName());
+                if (value instanceof StorageDataComplexObject) {
+                    param.add(((StorageDataComplexObject) value).toStorageData());
+                } else {
+                    param.add(value);
+                }
+            }
+
+            if (i != columns.size() - 1) {
+                sqlBuilder.append(",");
+            }
+        }
+        sqlBuilder.append(")");
+        String sql = sqlBuilder.toString();
+        if (!CollectionUtils.isEmpty(valueList)) {
+            for (Object object : valueList) {
+                List<Object> paramCopy = new ArrayList<>(param);
+                paramCopy.set(position, object);
+                sqlExecutors.add(new SQLExecutor(sql, paramCopy));
+            }
+        } else {
+            sqlExecutors.add(new SQLExecutor(sql, param));
+        }
+
+        return sqlExecutors;
+    }
+
+    protected <T extends StorageData> SQLExecutor getUpdateExecutor(String modelName, T metrics,
+                                                                    StorageBuilder<T> storageBuilder) throws IOException {
+        final HashMapConverter.ToStorage toStorage = new HashMapConverter.ToStorage();
+        storageBuilder.entity2Storage(metrics, toStorage);
+        Map<String, Object> objectMap = toStorage.obtain();
 
         SQLBuilder sqlBuilder = new SQLBuilder("UPDATE " + modelName + " SET ");
         List<ModelColumn> columns = TableMetaInfo.get(modelName).getColumns();
@@ -143,8 +231,8 @@ public class H2SQLExecutor {
             }
 
             Object value = objectMap.get(column.getColumnName().getName());
-            if (value instanceof StorageDataType) {
-                param.add(((StorageDataType)value).toStorageData());
+            if (value instanceof StorageDataComplexObject) {
+                param.add(((StorageDataComplexObject) value).toStorageData());
             } else {
                 param.add(value);
             }

@@ -18,99 +18,64 @@
 
 package org.apache.skywalking.oap.server.core.alarm.provider;
 
-import com.google.gson.*;
-import java.io.*;
-import java.net.InetSocketAddress;
-import java.util.*;
-import javax.servlet.*;
-import javax.servlet.http.*;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.linecorp.armeria.common.HttpResponse;
+import com.linecorp.armeria.common.HttpStatus;
+import com.linecorp.armeria.server.ServerBuilder;
+import com.linecorp.armeria.testing.junit4.server.ServerRule;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.skywalking.oap.server.core.alarm.AlarmMessage;
 import org.apache.skywalking.oap.server.core.source.DefaultScopeDefine;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.servlet.*;
-import org.junit.*;
+import org.junit.Assert;
+import org.junit.Rule;
+import org.junit.Test;
 
-public class WebhookCallbackTest implements Servlet {
-    private Server server;
-    private volatile boolean isSuccess = false;
+public class WebhookCallbackTest {
+    private final AtomicBoolean isSuccess = new AtomicBoolean();
 
-    @Before
-    public void init() throws Exception {
-        server = new Server(new InetSocketAddress("127.0.0.1", 8778));
-        ServletContextHandler servletContextHandler = new ServletContextHandler(ServletContextHandler.NO_SESSIONS);
-        servletContextHandler.setContextPath("/webhook");
+    @Rule
+    public final ServerRule server = new ServerRule() {
+        @Override
+        protected void configure(ServerBuilder sb) {
+            sb.service("/webhook/receiveAlarm", (ctx, req) -> HttpResponse.from(
+                req.aggregate().thenApply(r -> {
+                    final String content = r.content().toStringUtf8();
+                    final JsonArray elements = new Gson().fromJson(content, JsonArray.class);
+                    if (elements.size() == 2) {
+                        isSuccess.set(true);
+                        return HttpResponse.of(HttpStatus.OK);
+                    }
 
-        server.setHandler(servletContextHandler);
-
-        ServletHolder servletHolder = new ServletHolder();
-        servletHolder.setServlet(this);
-        servletContextHandler.addServlet(servletHolder, "/receiveAlarm");
-
-        server.start();
-    }
-
-    @After
-    public void stop() throws Exception {
-        server.stop();
-    }
+                    return HttpResponse.of(HttpStatus.INTERNAL_SERVER_ERROR);
+                }))
+            );
+        }
+    };
 
     @Test
     public void testWebhook() {
         List<String> remoteEndpoints = new ArrayList<>();
-        remoteEndpoints.add("http://127.0.0.1:8778/webhook/receiveAlarm");
-        WebhookCallback webhookCallback = new WebhookCallback(remoteEndpoints);
+        remoteEndpoints.add("http://127.0.0.1:" + server.httpPort() + "/webhook/receiveAlarm");
+        Rules rules = new Rules();
+        rules.setWebhooks(remoteEndpoints);
+        AlarmRulesWatcher alarmRulesWatcher = new AlarmRulesWatcher(rules, null);
+        WebhookCallback webhookCallback = new WebhookCallback(alarmRulesWatcher);
         List<AlarmMessage> alarmMessages = new ArrayList<>(2);
         AlarmMessage alarmMessage = new AlarmMessage();
-        alarmMessage.setScopeId(DefaultScopeDefine.ALL);
+        alarmMessage.setScopeId(DefaultScopeDefine.SERVICE);
+        alarmMessage.setRuleName("service_resp_time_rule");
         alarmMessage.setAlarmMessage("alarmMessage with [DefaultScopeDefine.All]");
         alarmMessages.add(alarmMessage);
         AlarmMessage anotherAlarmMessage = new AlarmMessage();
+        anotherAlarmMessage.setRuleName("service_resp_time_rule_2");
         anotherAlarmMessage.setScopeId(DefaultScopeDefine.ENDPOINT);
         anotherAlarmMessage.setAlarmMessage("anotherAlarmMessage with [DefaultScopeDefine.Endpoint]");
         alarmMessages.add(anotherAlarmMessage);
         webhookCallback.doAlarm(alarmMessages);
 
-        Assert.assertTrue(isSuccess);
+        Assert.assertTrue(isSuccess.get());
     }
-
-    @Override public void init(ServletConfig config) throws ServletException {
-
-    }
-
-    @Override public ServletConfig getServletConfig() {
-        return null;
-    }
-
-    @Override
-    public void service(ServletRequest request, ServletResponse response) throws ServletException, IOException {
-        HttpServletRequest httpServletRequest = (HttpServletRequest)request;
-        if (httpServletRequest.getContentType().equals("application/json")) {
-            InputStream inputStream = request.getInputStream();
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[2048];
-            int readCntOnce;
-
-            while ((readCntOnce = inputStream.read(buffer)) >= 0) {
-                out.write(buffer, 0, readCntOnce);
-            }
-
-            JsonArray elements = new Gson().fromJson(new String(out.toByteArray()), JsonArray.class);
-            if (elements.size() == 2) {
-                ((HttpServletResponse)response).setStatus(200);
-                isSuccess = true;
-                return;
-            }
-
-            ((HttpServletResponse)response).setStatus(500);
-        }
-    }
-
-    @Override public String getServletInfo() {
-        return null;
-    }
-
-    @Override public void destroy() {
-
-    }
-
 }
