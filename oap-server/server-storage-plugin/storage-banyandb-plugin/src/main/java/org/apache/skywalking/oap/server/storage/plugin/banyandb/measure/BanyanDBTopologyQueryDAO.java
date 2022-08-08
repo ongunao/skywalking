@@ -25,6 +25,7 @@ import org.apache.skywalking.banyandb.v1.client.TimestampRange;
 import org.apache.skywalking.oap.server.core.UnexpectedException;
 import org.apache.skywalking.oap.server.core.analysis.TimeBucket;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.endpoint.EndpointRelationServerSideMetrics;
+import org.apache.skywalking.oap.server.core.analysis.manual.relation.instance.ServiceInstanceRelationClientSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.instance.ServiceInstanceRelationServerSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationClientSideMetrics;
 import org.apache.skywalking.oap.server.core.analysis.manual.relation.process.ProcessRelationServerSideMetrics;
@@ -169,7 +170,7 @@ public class BanyanDBTopologyQueryDAO extends AbstractBanyanDBDAO implements ITo
             timestampRange = new TimestampRange(TimeBucket.getTimestamp(startTB), TimeBucket.getTimestamp(endTB));
         }
         final String modelName = detectPoint == DetectPoint.SERVER ? ServiceInstanceRelationServerSideMetrics.INDEX_NAME :
-                ServiceRelationClientSideMetrics.INDEX_NAME;
+            ServiceInstanceRelationClientSideMetrics.INDEX_NAME;
         final Map<String, Call.CallDetail> callMap = new HashMap<>();
         for (final QueryBuilder<MeasureQuery> q : queryBuilderList) {
             MeasureQueryResponse resp = query(modelName,
@@ -256,7 +257,7 @@ public class BanyanDBTopologyQueryDAO extends AbstractBanyanDBDAO implements ITo
             ProcessRelationClientSideMetrics.INDEX_NAME;
         final Map<String, Call.CallDetail> callMap = new HashMap<>();
         MeasureQueryResponse resp = query(modelName,
-            ImmutableSet.of(Metrics.ENTITY_ID),
+            ImmutableSet.of(Metrics.ENTITY_ID, ProcessRelationClientSideMetrics.COMPONENT_ID),
             Collections.emptySet(), timestampRange, new QueryBuilder<MeasureQuery>() {
                 @Override
                 protected void apply(MeasureQuery query) {
@@ -265,7 +266,8 @@ public class BanyanDBTopologyQueryDAO extends AbstractBanyanDBDAO implements ITo
             });
         final Call.CallDetail call = new Call.CallDetail();
         final String entityId = resp.getDataPoints().get(0).getTagValue(Metrics.ENTITY_ID);
-        call.buildProcessRelation(entityId, detectPoint);
+        final int componentId = ((Number) resp.getDataPoints().get(0).getTagValue(ProcessRelationClientSideMetrics.COMPONENT_ID)).intValue();
+        call.buildProcessRelation(entityId, componentId, detectPoint);
         callMap.putIfAbsent(entityId, call);
         return new ArrayList<>(callMap.values());
     }

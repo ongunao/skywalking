@@ -91,6 +91,9 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
         if (StringUtil.isNotEmpty(group)) {
             query.must(Query.term(ServiceTraffic.GROUP, group));
         }
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ServiceTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ServiceTraffic.INDEX_NAME));
+        }
         final SearchParams params = new SearchParams().scroll(SCROLL_CONTEXT_RETENTION);
         final List<Service> services = new ArrayList<>();
 
@@ -128,6 +131,9 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
         final BoolQueryBuilder query =
             Query.bool()
                  .must(Query.term(ServiceTraffic.SERVICE_ID, serviceId));
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ServiceTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ServiceTraffic.INDEX_NAME));
+        }
         final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
 
         final SearchResponse response = getClient().search(index, search.build());
@@ -145,6 +151,9 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
             Query.bool()
                  .must(Query.range(InstanceTraffic.LAST_PING_TIME_BUCKET).gte(minuteTimeBucket))
                  .must(Query.term(InstanceTraffic.SERVICE_ID, serviceId));
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(InstanceTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, InstanceTraffic.INDEX_NAME));
+        }
         final int batchSize = Math.min(queryMaxSize, scrollingBatchSize);
         final SearchBuilder search = Search.builder().query(query).size(batchSize);
 
@@ -168,9 +177,13 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
     public ServiceInstance getInstance(final String instanceId) throws IOException {
         final String index =
             IndexController.LogicIndicesRegister.getPhysicalTableName(InstanceTraffic.INDEX_NAME);
+        String id = instanceId;
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(InstanceTraffic.INDEX_NAME)) {
+            id = IndexController.INSTANCE.generateDocId(InstanceTraffic.INDEX_NAME, instanceId);
+        }
         final BoolQueryBuilder query =
             Query.bool()
-                 .must(Query.term("_id", instanceId));
+                 .must(Query.term("_id", id));
         final SearchBuilder search = Search.builder().query(query).size(1);
 
         final SearchResponse response = getClient().search(index, search.build());
@@ -191,6 +204,10 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
         if (!Strings.isNullOrEmpty(keyword)) {
             String matchCName = MatchCNameBuilder.INSTANCE.build(EndpointTraffic.NAME);
             query.must(Query.match(matchCName, keyword));
+        }
+
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(EndpointTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, EndpointTraffic.INDEX_NAME));
         }
 
         final SearchBuilder search = Search.builder().query(query).size(limit);
@@ -214,30 +231,81 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
     }
 
     @Override
-    public List<Process> listProcesses(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
-                                       final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+    public List<Process> listProcesses(String serviceId, ProfilingSupportStatus supportStatus, long lastPingStartTimeBucket, long lastPingEndTimeBucket) throws IOException {
         final String index =
             IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
 
         final BoolQueryBuilder query = Query.bool();
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
         final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
-        appendProcessWhereQuery(query, serviceId, instanceId, agentId, profilingSupportStatus,
-                lastPingStartTimeBucket, lastPingEndTimeBucket);
+        appendProcessWhereQuery(query, serviceId, null, null, supportStatus, lastPingStartTimeBucket, lastPingEndTimeBucket);
         final SearchResponse results = getClient().search(index, search.build());
 
         return buildProcesses(results);
     }
 
     @Override
-    public long getProcessesCount(String serviceId, String instanceId, String agentId, final ProfilingSupportStatus profilingSupportStatus,
-                                  final long lastPingStartTimeBucket, final long lastPingEndTimeBucket) throws IOException {
+    public List<Process> listProcesses(String serviceInstanceId, long lastPingStartTimeBucket, long lastPingEndTimeBucket) throws IOException {
         final String index =
-                IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
 
         final BoolQueryBuilder query = Query.bool();
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
+        final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
+        appendProcessWhereQuery(query, null, serviceInstanceId, null, null, lastPingStartTimeBucket, lastPingEndTimeBucket);
+        final SearchResponse results = getClient().search(index, search.build());
+
+        return buildProcesses(results);
+    }
+
+    @Override
+    public List<Process> listProcesses(String agentId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
+
+        final BoolQueryBuilder query = Query.bool();
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
+        final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
+        appendProcessWhereQuery(query, null, null, agentId, null, 0, 0);
+        final SearchResponse results = getClient().search(index, search.build());
+
+        return buildProcesses(results);
+    }
+
+    @Override
+    public long getProcessCount(String serviceId, ProfilingSupportStatus profilingSupportStatus, long lastPingStartTimeBucket, long lastPingEndTimeBucket) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
+
+        final BoolQueryBuilder query = Query.bool();
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
         final SearchBuilder search = Search.builder().query(query).size(0);
-        appendProcessWhereQuery(query, serviceId, instanceId, agentId, profilingSupportStatus,
-                lastPingStartTimeBucket, lastPingEndTimeBucket);
+        appendProcessWhereQuery(query, serviceId, null, null, profilingSupportStatus,
+            lastPingStartTimeBucket, lastPingEndTimeBucket);
+        final SearchResponse results = getClient().search(index, search.build());
+
+        return results.getHits().getTotal();
+    }
+
+    @Override
+    public long getProcessCount(String instanceId) throws IOException {
+        final String index =
+            IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
+
+        final BoolQueryBuilder query = Query.bool();
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
+        final SearchBuilder search = Search.builder().query(query).size(0);
+        appendProcessWhereQuery(query, null, instanceId, null, null, 0, 0);
         final SearchResponse results = getClient().search(index, search.build());
 
         return results.getHits().getTotal();
@@ -277,6 +345,9 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
             IndexController.LogicIndicesRegister.getPhysicalTableName(ProcessTraffic.INDEX_NAME);
         final BoolQueryBuilder query = Query.bool()
                                             .must(Query.term("_id", processId));
+        if (IndexController.LogicIndicesRegister.isPhysicalTable(ProcessTraffic.INDEX_NAME)) {
+            query.must(Query.term(IndexController.LogicIndicesRegister.METRIC_TABLE_NAME, ProcessTraffic.INDEX_NAME));
+        }
         final SearchBuilder search = Search.builder().query(query).size(queryMaxSize);
 
         final SearchResponse response = getClient().search(index, search.build());
@@ -353,6 +424,7 @@ public class MetadataQueryEsDAO extends EsDAO implements IMetadataQueryDAO {
             process.setInstanceName(IDManager.ServiceInstanceID.analysisId(instanceId).getName());
             process.setAgentId(processTraffic.getAgentId());
             process.setDetectType(ProcessDetectType.valueOf(processTraffic.getDetectType()).name());
+            process.setProfilingSupportStatus(ProfilingSupportStatus.valueOf(processTraffic.getProfilingSupportStatus()).name());
 
             JsonObject properties = processTraffic.getProperties();
             if (properties != null) {

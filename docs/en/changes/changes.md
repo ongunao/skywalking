@@ -26,6 +26,15 @@
 * Support `sumHistogram` in `MAL`.
 * [Breaking Change] Make the eBPF Profiling task support to the service instance level, index/table `ebpf_profiling_task` is required to be re-created when bump up from previous releases.
 * Fix race condition in Banyandb storage
+* Support `SUM_PER_MIN` downsampling in `MAL`.
+* Support `sumHistogramPercentile` in `MAL`.
+* Add `VIRTUAL_CACHE` to Layer, to fix conjectured Redis server, which icon can't show on the topology.
+* [Breaking Change] Elasticsearch storage merge all metrics/meter and records(without super datasets) indices into one physical index template `metrics-all` and `records-all` on the default setting.
+  Provide system environment variable(`SW_STORAGE_ES_LOGIC_SHARDING`) to shard metrics/records indices into multi-physical indices as the previous versions(one index template per metric/meter aggregation function).
+  In the current one index mode, users still could choose to adjust ElasticSearch's shard number(`SW_STORAGE_ES_INDEX_SHARDS_NUMBER`) to scale out.
+* [Breaking Change] Many columns of metrics and records model names are changed, The H2/Mysql/Tidb/Postgres storage users are required to remove all metrics-related and records-related tables for OAP to re-create or use a new database instance.
+* Fix Zipkin trace query the max size of spans.
+* Add `tls` and `https` component IDs for Network Profiling.
 
 #### UI
 
@@ -35,7 +44,7 @@
 * Optimize log tables.
 * Fix log detail pop-up page doesn't work.
 * Optimize table widget to hide the whole metric column when no metric is set.
-* Implement the Event widget.
+* Implement the Event widget. Remove `event` menu.
 * Fix span detail text overlap.
 * Add Python Bottle Plugin Logo.
 * Implement an association between widgets(line, bar, area graphs) with time.
@@ -52,10 +61,18 @@
 * Fix dashboard list search box not work.
 * Fix short time range.
 * Fix event widget incompatibility in Safari.
+* Refactor the tags component to support searching for tag keys and values.
+* Implement the log widget and the trace widget associate with each other, remove log tables on the trace widget.
+* Add log widget to general service root.
+* Associate the event widget with the trace and log widget.
+* Add the MYSQL layer and update layer routers.
+* Fix query order for trace list.
+* Add a calculation to convert seconds to days.
 
 #### Documentation
 
 * Fix invalid links in release docs.
 * Clean up doc about event metrics.
+* Add a table for metric calculations in the ui doc.
 
 All issues and pull requests are [here](https://github.com/apache/skywalking/milestone/136?closed=1)
