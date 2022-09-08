@@ -21,7 +21,7 @@
     <parent>
         <artifactId>apm</artifactId>
         <groupId>org.apache.skywalking</groupId>
-        <version>9.2.0-SNAPSHOT</version>
+        <version>9.3.0-SNAPSHOT</version>
     </parent>
     <packaging>pom</packaging>
     <modelVersion>4.0.0</modelVersion>
@@ -40,13 +40,13 @@
         <joda-time.version>2.10.5</joda-time.version>
         <zookeeper.version>3.5.7</zookeeper.version>
         <guava.version>31.1-jre</guava.version>
-        <snakeyaml.version>1.28</snakeyaml.version>
+        <snakeyaml.version>1.31</snakeyaml.version>
         <protobuf-java.version>3.19.4</protobuf-java.version>
         <protobuf-java-util.version>3.19.4</protobuf-java-util.version>
         <commons-codec.version>1.11</commons-codec.version>
         <commons-lang3.version>3.12.0</commons-lang3.version>
         <commons-io.version>2.7</commons-io.version>
-        <kubernetes.version>15.0.1</kubernetes.version>
+        <kubernetes.version>16.0.0</kubernetes.version>
         <hikaricp.version>3.1.0</hikaricp.version>
         <zipkin.version>2.23.16</zipkin.version>
         <jackson-core.version>2.13.2</jackson-core.version>
@@ -68,7 +68,7 @@
         <mvel.version>2.4.8.Final</mvel.version>
         <commons-beanutils.version>1.9.4</commons-beanutils.version>
         <flatbuffers-java.version>1.12.0</flatbuffers-java.version>
-        <postgresql.version>42.3.3</postgresql.version>
+        <postgresql.version>42.4.1</postgresql.version>
         <jetcd.version>0.5.3</jetcd.version>
         <testcontainers.version>1.15.3</testcontainers.version>
         <armeria.version>1.16.0</armeria.version>

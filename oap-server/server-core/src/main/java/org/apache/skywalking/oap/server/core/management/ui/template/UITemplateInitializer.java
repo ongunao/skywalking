@@ -48,6 +48,8 @@ public class UITemplateInitializer {
         Layer.OS_LINUX.name(),
         Layer.MESH_CP.name(),
         Layer.MESH_DP.name(),
+        Layer.MYSQL.name(),
+        Layer.POSTGRESQL.name(),
         Layer.K8S.name(),
         Layer.BROWSER.name(),
         Layer.SO11Y_OAP.name(),

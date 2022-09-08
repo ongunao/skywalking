@@ -422,6 +422,18 @@ https:
 tls:
   id: 130
   languages: ebpf
+Micronaut:
+  id: 131
+  languages: Java
+NATS:
+  id: 132
+  languages: Java
+Impala-jdbc-driver:
+  id: 133
+  languages: Java
+Impala:
+  id: 134
+  languages: Java
 
 # .NET/.NET Core components
 # [3000, 4000) for C#/.NET only
@@ -598,6 +610,12 @@ FastAPI:
 Bottle:
   id: 7015
   languages: Python
+AsyncPG:
+  id: 7016
+  languages: Python
+AIORedis:
+  id: 7017
+  languages: Python
 
 # PHP components
 # [8000, 9000) for PHP agent
@@ -690,3 +708,6 @@ Component-Server-Mappings:
   ClickHouse-jdbc-driver: ClickHouse
   Apache-Kylin-jdbc-driver: Apache-Kylin
   MysqlClient: Mysql
+  AsyncPG: PostgreSQL
+  AIORedis: Redis
+  Impala-jdbc-driver: Impala
